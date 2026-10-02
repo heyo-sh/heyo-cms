@@ -1,0 +1,15 @@
+{
+  "name": "@heyo-sh/create-heyo-cms",
+  "version": "0.0.0",
+  "description": "Project generator for Heyo CMS.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-heyo-cms": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "echo \"create-heyo-cms is scaffolded in stage 10\"",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

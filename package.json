@@ -1,0 +1,38 @@
+{
+  "name": "heyo-cms-monorepo",
+  "private": true,
+  "packageManager": "bun@1.3.1",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/create-heyo-cms build",
+    "test": "bun test",
+    "example": "bun scripts/examples.ts",
+    "typecheck": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/heyo-cms typecheck && bun run --filter @heyo-sh/heyo-cms-admin typecheck && bun run --filter @heyo-sh/create-heyo-cms typecheck && bun run --filter heyo-cms-next-example typecheck && tsc -p tsconfig.scripts.json",
+    "format": "prettier --write .",
+    "lint": "prettier --check .",
+    "format-staged": "lint-staged",
+    "prepare": "husky",
+    "knip": "knip --include files,dependencies,unlisted,unresolved",
+    "quality:pre-push": "bun run lint && bun run knip && bun run typecheck && bun test",
+    "quality": "bun run lint && bun run knip && bun run typecheck && bun test && bun run build",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "3.0.3",
+    "@types/node": "26.6.3",
+    "bun-types": "1.4.2",
+    "husky": "9.1.7",
+    "knip": "6.38.0",
+    "lint-staged": "17.5.1",
+    "prettier": "3.9.9",
+    "typescript": "7.0.2"
+  },
+  "lint-staged": {
+    "*.{cjs,css,cts,html,js,json,jsonc,jsx,md,mdx,mjs,mts,ts,tsx,yaml,yml}": "prettier --write"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@heyo-sh/heyo-cms-admin",
+  "version": "0.0.0",
+  "description": "The Heyo CMS admin panel, served from the CMS handler itself.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

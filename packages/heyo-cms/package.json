@@ -1,0 +1,118 @@
+{
+  "name": "@heyo-sh/heyo-cms",
+  "version": "0.0.0",
+  "description": "Framework-agnostic, TypeScript-first headless CMS with its own panel, RBAC, i18n, native AI and first-class media.",
+  "keywords": [
+    "cms",
+    "headless-cms",
+    "typescript",
+    "postgres",
+    "mongodb",
+    "sqlite",
+    "cloudflare-workers",
+    "vercel"
+  ],
+  "homepage": "https://heyo.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heyo-sh/heyo-cms.git",
+    "directory": "packages/heyo-cms"
+  },
+  "bugs": {
+    "url": "https://github.com/heyo-sh/heyo-cms/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "bin": {
+    "heyo-cms": "./dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "peerDependencies": {
+    "mongodb": "^6.0.0",
+    "pg": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mongodb": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "pg": "8.16.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./fields": {
+      "types": "./dist/fields.d.ts",
+      "default": "./dist/fields.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./query": {
+      "types": "./dist/query.d.ts",
+      "default": "./dist/query.js"
+    },
+    "./migrations": {
+      "types": "./dist/migrations.d.ts",
+      "default": "./dist/migrations.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "default": "./dist/auth.js"
+    },
+    "./uploads": {
+      "types": "./dist/uploads.d.ts",
+      "default": "./dist/uploads.js"
+    },
+    "./postgres": {
+      "types": "./dist/db/postgres.d.ts",
+      "default": "./dist/db/postgres.js"
+    },
+    "./sqlite": {
+      "types": "./dist/db/sqlite.d.ts",
+      "default": "./dist/db/sqlite.js"
+    },
+    "./d1": {
+      "types": "./dist/db/d1.d.ts",
+      "default": "./dist/db/d1.js"
+    },
+    "./mongodb": {
+      "types": "./dist/db/mongodb.d.ts",
+      "default": "./dist/db/mongodb.js"
+    }
+  },
+  "scripts": {
+    "dev": "bun run build --watch",
+    "build": "rm -rf dist && bun run build:core && bun run build:types",
+    "build:core": "bun build src/index.ts src/types.ts src/config.ts src/fields.ts src/schema.ts src/query.ts src/migrations.ts src/auth.ts src/uploads.ts src/cli.ts src/db/postgres.ts src/db/sqlite.ts src/db/d1.ts src/db/mongodb.ts --outdir dist --root src --target node --production --splitting --external zod --external pg --external mongodb",
+    "build:types": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test"
+  }
+}

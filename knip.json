@@ -1,0 +1,38 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreWorkspaces": ["examples/*"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.ts"],
+      "project": ["scripts/**/*.ts"]
+    },
+    "packages/heyo-cms": {
+      "entry": [
+        "src/index.ts",
+        "src/types.ts",
+        "src/config.ts",
+        "src/fields.ts",
+        "src/schema.ts",
+        "src/query.ts",
+        "src/migrations.ts",
+        "src/cli.ts",
+        "src/auth.ts",
+        "src/uploads.ts",
+        "src/db/postgres.ts",
+        "src/db/sqlite.ts",
+        "src/db/d1.ts",
+        "src/db/mongodb.ts",
+        "test/**/*.test.ts",
+        "test/contract/*.ts"
+      ],
+      "project": ["src/**/*.ts", "test/**/*.ts"],
+      "ignoreDependencies": ["pg"]
+    },
+    "packages/create-heyo-cms": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/heyo-cms-admin": {
+      "project": ["src/**/*.ts"]
+    }
+  }
+}
