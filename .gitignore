@@ -9,6 +9,17 @@ coverage/
 .wrangler/
 .vercel/
 .heyo-playground/
+
+# The six framework examples are written by `create-heyo-cms` on first use
+# (`bun run example up next-vercel`). Committing a copy of a template is how a
+# template and its example drift apart.
+examples/next-vercel/
+examples/next-cloudflare/
+examples/astro-vercel/
+examples/astro-cloudflare/
+examples/react-router-vercel/
+examples/react-router-cloudflare/
+
 *.tsbuildinfo
 *.tgz
 *.sqlite
