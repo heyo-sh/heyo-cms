@@ -1,0 +1,50 @@
+---
+title: Heyo CMS
+description: A framework-agnostic, TypeScript-first headless CMS with its own panel, RBAC, i18n, native AI and first-class media.
+---
+
+# Heyo CMS
+
+A headless CMS that is a library, not a platform. The engine is a plain
+`Request → Response` handler with no framework in its dependency tree, so it
+mounts in Next.js, Astro or React Router from **one file** and deploys to
+Vercel or Cloudflare Workers without a second service.
+
+```bash
+bun create @heyo-sh/heyo-cms
+```
+
+Six questions — name, framework, deployment, database, media storage, package
+manager — and a project that runs. See the [quickstart](/quickstart/next) for
+your framework.
+
+## What you get
+
+|                |                                                                                   |
+| -------------- | --------------------------------------------------------------------------------- |
+| **Content**    | collections, globals, 13 field types, `defineField()` for your own                |
+| **Databases**  | Postgres, MongoDB, SQLite and Cloudflare D1, behind one neutral query AST         |
+| **Migrations** | a deterministic diff written to files in your repository; no `push` mode          |
+| **Panel**      | served from the same handler, same origin, no second deployment                   |
+| **Auth**       | editors and machines: password, magic link, OAuth, OIDC, TOTP, API keys           |
+| **Access**     | `collection:action` roles, rules that return a filter, field-level read and write |
+| **Media**      | S3, R2, GCS, Azure or a disk; variants, focal point, reference-counted lifecycle  |
+| **i18n**       | a list of codes, per-field fallback, an "untranslated" marker                     |
+| **AI**         | per field, never autosaved, every call accounted for                              |
+| **Webhooks**   | HMAC-signed, retried, replayable, with a dead-letter queue                        |
+
+## The three ideas worth knowing first
+
+**Status is an ordinary field.** There is no document lifecycle in the engine:
+no `drafts`, no `publish()`, no `published_data`. A consumer filters
+`where: eq("status", "published")`, and who may publish is who may write that
+field. [Access control](/rbac) explains the consequence.
+
+**Content lives in a JSON document body.** One `documents` table holds every
+collection, so adding a field or a language is not a table rewrite — and one
+engine-neutral model works on Postgres, MongoDB and SQLite at once.
+
+**No SQL leaves an adapter.** The engine builds a neutral query AST and
+neutral migration steps; each adapter renders them. A feature that cannot be
+expressed in the AST cannot be expressed in the engine either, which is what
+keeps the fourth database a translation job rather than a project.

@@ -1,0 +1,114 @@
+---
+title: Authentication and access
+description: Editors, machines, roles, rules that return a filter, and who may publish.
+---
+
+# Authentication and access
+
+The CMS authenticates **editors and machines, and nobody else**. The
+application you are building brings its own identity layer.
+
+```ts
+admin: {
+  auth: cmsUsers({
+    methods: ["password", "magic-link", "github", "google"],
+    twoFactor: true,
+    apiKeys: { enabled: true, scopes: ["read", "write"] },
+    session: { expiresIn: "7d" },
+    sso: oidc({ issuer: process.env.OIDC_ISSUER!, mapRoles: (c) => c.groups ?? [] }),
+  }),
+}
+```
+
+Password, magic link, OAuth, OIDC, TOTP, invitations, resets, sessions and API
+keys run on Web Crypto alone, so the same code signs people in on Node, Bun
+and Workers.
+
+```ts
+await cms.auth.password.signIn({ email, password });
+await cms.auth.users.invite({ email, roles: ["editor"] });
+await cms.auth.apiKeys.create({ name: "Deploy", scopes: ["read"] });
+const actor = await cms.auth.actorFromRequest(request); // cookie or bearer
+```
+
+**The CMS never sends email.** `invite()`, `magicLink.request()` and
+`password.requestReset()` mint a single-use token and hand it back; delivering
+it is the application's job. Over HTTP the magic-link and reset routes only
+exist when `deliverToken` is configured — otherwise a stranger could request a
+link for an administrator and read it out of the response.
+
+**There is no sign-up route.** Accounts arrive by invitation or from SSO —
+with one exception, which is the account that does the inviting. While
+`cms_users` is empty the sign-in screen offers to create it, and the account
+it creates closes the offer: `POST /auth/setup` answers 409 from then on, and
+the check runs inside the transaction that does the insert, so two browsers
+racing produce one administrator. The same account can be made from a shell
+instead, which is what a pipeline does:
+
+```bash
+heyo-cms create-admin --email you@example.com
+```
+
+The first account is given the `admin` role. To name a different one, or to
+refuse the browser route altogether:
+
+```ts
+admin: {
+  auth: cmsUsers({
+    methods: ["password"],
+    firstUser: { roles: ["owner"] },  // or false
+  }),
+}
+```
+
+## Roles
+
+```ts
+rbac: {
+  roles: {
+    admin: ["*"],
+    editor: ["posts:*", "media:*"],
+    writer: ["posts:read", "posts:create", "posts:update"],
+    viewer: ["*:read"],
+  },
+  customRoles: true,   // roles created in the panel, stored in `cms_roles`
+}
+```
+
+**Declaring `rbac` changes the default**: a collection with no `access` rule
+for an operation then requires `collection:action`. A rule that _is_ declared
+is the final word, and RBAC is not consulted for it.
+
+`access` covers CRUD only — `read`, `create`, `update`, `delete` (and `purge`
+for a permanent removal). There is no `publish`.
+
+## A rule may return a filter
+
+```ts
+access: {
+  read: ({ actor }) =>
+    permits(actor, "posts:read") ? true : eq("status", "published"),
+}
+```
+
+The filter goes into the query, including the `COUNT` — never into the
+serialiser. A row the actor may not read is never fetched, never counted and
+never paged over.
+
+## Who may publish
+
+Nobody, and everybody: there is no publish operation. Status is an ordinary
+`select()` field, so the question is who may **write** it:
+
+```ts
+status: select({
+  options: ["draft", "published"],
+  default: "draft",
+  access: { update: ({ actor }) => permits(actor, "posts:publish") },
+}),
+```
+
+A write that touches a field the actor may not write is **refused**, not
+silently dropped. A field the actor may not read is **absent** from the
+document rather than `null` — absent is a fact about permission, `null` is a
+fact about content — and `depth` cannot be used to read it through a relation.

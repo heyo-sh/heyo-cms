@@ -1,0 +1,142 @@
+---
+title: The CLI
+description: Migrations, the first administrator, seeds, and content that can leave as easily as it arrived.
+---
+
+# The CLI
+
+```
+heyo-cms generate [--name <name>]   write a migration for what changed
+heyo-cms migrate                    apply pending migrations
+heyo-cms status                     applied, pending, and changes with no migration
+
+heyo-cms create-admin --email you@example.com
+heyo-cms seed [--file <path>]
+
+heyo-cms export [--out <file>] [--collections a,b] [--include-trashed]
+heyo-cms import <file> [--on-conflict skip|update|fail] [--dry-run]
+
+heyo-cms telemetry                  print exactly what would be reported
+```
+
+Shared flags: `--config <path>` (default `./heyo-cms.config.ts`), `--dir`
+(migrations directory), `--env` (default `./.env`, then `./.env.local`; a
+variable already in the environment always wins).
+
+## Migrations
+
+`generate` diffs your configuration against `migrations/meta/snapshot.json`,
+never against the live database: it produces the same file on every machine
+and can never propose dropping a table it does not own. `status` exits
+non-zero when the repository is ahead of the database, when an applied
+migration has been edited, or when a configuration change has no migration
+yet — so CI notices without reading the output.
+
+There is no `push` mode.
+
+## The first administrator
+
+On a CMS with no accounts, open the panel: the sign-in screen offers to create
+the administrator, and the account it creates closes that offer behind it.
+That is the whole setup for most projects, and the rest of this section is for
+the ones where the first browser to arrive is not the one that should become
+the administrator.
+
+```bash
+heyo-cms create-admin --email you@example.com
+```
+
+A password that was not supplied is generated and printed once — prompting
+would mean reading from a terminal that may not exist, and the generated one
+is stronger. The command refuses an address that already has an account
+rather than resetting its password. Unlike the screen it is not limited to the
+first account: it is how a pipeline provisions an editor at any point.
+
+Either one closes the other. `POST /auth/setup` is registered only while
+`cms_users` is empty, and the count is taken inside the transaction that does
+the insert — two browsers racing produce one administrator and one 409. To
+keep the panel out of it entirely:
+
+```ts
+admin: {
+  auth: cmsUsers({ methods: ["password"], firstUser: false }),
+}
+```
+
+## Seeds
+
+The CMS ships no fixtures: content that means something is content somebody
+wrote for their own collections. What it provides is the convention — a module
+exporting `seed(cms)`, which the generated templates ship filled in:
+
+```ts
+// heyo-cms.seed.ts
+import { systemActor } from "@heyo-sh/heyo-cms";
+import { cms } from "./heyo-cms.config.ts";
+
+export async function seed(instance = cms) {
+  const existing = await instance.api.posts.find({
+    actor: systemActor(),
+    limit: 1,
+  });
+  if (existing.docs.length > 0) return; // idempotent, or it is a bug report
+  await instance.api.posts.create({
+    data: { title: "Hello" },
+    actor: systemActor(),
+    source: "cli",
+  });
+}
+```
+
+## Content in and out
+
+```bash
+heyo-cms export --out content.ndjson
+heyo-cms import content.ndjson --on-conflict update
+```
+
+Newline-delimited JSON, one record per line, header first — the only JSON
+shape that can be written and read a record at a time, and the only one that
+diffs and greps.
+
+**The export keeps every language.** It reads rows rather than documents,
+because a read resolves one locale and an export built on one would silently
+drop the rest.
+
+**The import is an ordinary set of writes.** Every document goes through
+`create`/`update`, so access control, validation, hooks, the activity log and
+the outbox all run. Ids are preserved, which is what keeps a relation pointing
+at the document it pointed at. `createdAt` and `updatedAt` become the import's
+own timestamps; a publication date that matters belongs in a field.
+
+This is **content transfer, not a database backup**. Media rows/bytes, accounts,
+sessions, API keys, audit history and webhook deliveries are not exported.
+Copy media separately, and make sure the destination's `i18n.locales` lists
+every language the export carries. Trashed records included in an export are
+skipped on import. Globals are updated regardless of `--on-conflict`.
+
+Imports use the system actor by default. Writes are not one file-wide
+transaction: an error can leave earlier records applied, and the
+CLI reports errors with a non-zero exit code. `--dry-run` checks parsing,
+collection names and conflicts, not hooks or full field validation.
+
+A document that is already there is skipped by default — an import is usually
+a restore into an empty deployment, and merging two environments should have
+to be asked for by name.
+
+## Telemetry
+
+The generator reports framework/deployment/database/storage choices. The CMS
+CLI reports runtime/OS, adapter IDs, feature flags, counts, and a truncated
+hash of the base path, database ID and collection/global names. This hash is
+not a unique installation ID or encryption. No content, credentials, raw
+names or file paths are sent. A running server
+never phones home, in any environment, for any reason.
+
+```bash
+heyo-cms telemetry        # prints the exact body, and whether it would be sent
+```
+
+Any one of these turns it off: `HEYO_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`,
+or `telemetry: { enabled: false }` in the configuration. It is also off,
+without being asked, on CI and under a test runner.

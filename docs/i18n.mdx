@@ -1,0 +1,82 @@
+---
+title: Languages
+description: A list of codes, per-field fallback, and the marker that makes a gap visible.
+---
+
+# Languages
+
+```ts
+i18n: {
+  defaultLocale: "en",
+  locales: ["en", "fr"],
+}
+```
+
+Codes, and nothing else. The English name of a language — "English",
+"French", "Polish" — and whether it is written right to left follow from the
+code, so there is nothing to keep in sync and the panel's language switcher
+still reads as language names rather than as `en` / `fr`.
+
+Two rules the configuration is checked against while the module loads:
+
+- `defaultLocale` has to be one of `locales`. Every read falls back to it, so
+  a default nobody offers would make untranslated fields resolve to nothing —
+  a typo that shows up as empty pages instead of as an error.
+- Leaving the section out is the same as `{ defaultLocale: "en", locales:
+["en"] }`. A site that never thinks about translation does not have to say so.
+
+```ts
+cms.locales.list();
+// [{ code: "en", name: "English", rtl: false, isDefault: true }, …]
+```
+
+The list is also served to anonymous callers at `GET /locales`, because a
+frontend needs it to render its own language switcher.
+
+## Reading and writing
+
+A localized field is stored as `{ [locale]: value }` and **one locale is
+resolved per read**, so nothing downstream has to know which fields are
+translated:
+
+```ts
+const post = await cms.api.posts.findById(id, { locale: "fr" });
+post.title; // a string, not a map
+post._fallback; // { title: "en" } when the French value was missing
+
+await cms.api.posts.update({ id, data: { title: "Bonjour" }, locale: "fr" });
+```
+
+A write touches one language and leaves the others alone.
+
+## Fallback is per field
+
+Partial translations are the norm, so a document with a translated title and
+an untranslated body has to be expressible. A field with no value in the
+requested language is answered from `defaultLocale`, and `_fallback` names
+every field that happened to — which is what the panel's "from en" badge
+reads, and what a frontend's "untranslated" badge can read.
+
+`fallbackLocale` overrides that for a single call:
+
+```ts
+// The gaps, not the substitutions: what an editor filling translations in wants.
+await cms.api.posts.findById(id, { locale: "fr", fallbackLocale: false });
+// One specific source, whatever the configuration says.
+await cms.api.posts.findById(id, { locale: "fr", fallbackLocale: "es" });
+```
+
+Both work over HTTP too: `?locale=fr&fallbackLocale=false`.
+
+## The edges
+
+- Adding a language is a line in `i18n.locales` and a deploy. Removing one
+  leaves the translations stored under the code alone, so putting it back
+  brings them back — a language switched off by accident at 18:00 on a Friday
+  has to be switchable back on at 18:01.
+- A localized field cannot be `unique`: uniqueness would have to be enforced
+  per locale, and the set of locales is configuration rather than a column.
+- A localized column cannot be sorted from the panel's list, because it is a
+  map keyed by locale; the header is not clickable rather than quietly wrong.
+- `heyo-cms export` writes the storage shape — every language intact — and the
+  importer writes each one back through the ordinary API.

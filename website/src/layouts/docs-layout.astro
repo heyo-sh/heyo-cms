@@ -1,0 +1,67 @@
+---
+import config from "../../heyo-docs.config";
+import {
+  DEFAULT_THEME_STORAGE_KEY,
+  themeBootstrapScript,
+} from "@heyo-sh/heyo-docs/theme/script";
+import { IntegrationScripts } from "@heyo-sh/heyo-docs/integrations";
+import { serializeJsonLd } from "@heyo-sh/heyo-docs/seo";
+import "virtual:heyo-docs-theme.css";
+import "../styles/app.css";
+
+interface Props {
+  title: string;
+  description: string;
+  canonical?: string;
+  robots?: "index, follow" | "noindex";
+  structuredData: unknown[];
+}
+
+const {
+  title,
+  description,
+  canonical,
+  robots = "index, follow",
+  structuredData,
+} = Astro.props;
+const jsonLd = serializeJsonLd(structuredData);
+const hasChangelog = config.groups.some((group) => group.type === "changelog");
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content={robots} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content={config.title} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    {canonical && <meta property="og:url" content={canonical} />}
+    {hasChangelog && (
+      <link
+        rel="alternate"
+        href="/rss.xml"
+        type="application/rss+xml"
+        title={`${config.title} updates`}
+      />
+    )}
+    <script
+      is:inline
+      set:html={themeBootstrapScript(DEFAULT_THEME_STORAGE_KEY, config.mode)}
+    ></script>
+    <IntegrationScripts integrations={config.integrations} placement="head" />
+    <script is:inline type="application/ld+json" set:html={jsonLd}></script>
+  </head>
+  <body>
+    <slot />
+    <IntegrationScripts integrations={config.integrations} placement="body" />
+  </body>
+</html>

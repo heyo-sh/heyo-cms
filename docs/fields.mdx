@@ -1,0 +1,142 @@
+---
+title: Fields
+description: The built-in field types, their options, and how to add your own.
+---
+
+# Fields
+
+```ts
+import {
+  boolean,
+  date,
+  json,
+  media,
+  multiselect,
+  number,
+  relation,
+  richText,
+  select,
+  text,
+  textarea,
+  seoFields,
+} from "@heyo-sh/heyo-cms/fields";
+```
+
+Every field accepts the common options (for `aiGenerate`, only textual built-ins
+currently support generation):
+
+```ts
+text({
+  required: true,
+  localized: true, // stored as { [locale]: value }, read one at a time
+  unique: true, // not available together with `localized`
+  index: true,
+  default: "Untitled",
+  label: "Title",
+  access: {
+    // field-level, checked before any hook runs
+    read: ({ actor }) => permits(actor, "posts:read_secret"),
+    update: ({ actor }) => permits(actor, "posts:publish"),
+  },
+  admin: { placeholder: "Title", hidden: false },
+  aiGenerate: { prompt: "Suggest a title for this document." },
+});
+```
+
+## The types
+
+| Type          | Stores               | Notable options                           |
+| ------------- | -------------------- | ----------------------------------------- |
+| `text`        | string               | `minLength`, `maxLength`, `pattern`       |
+| `textarea`    | string               | the same, rendered as a box               |
+| `richText`    | ProseMirror document | `nodes` — which nodes the panel offers    |
+| `number`      | number               | `integer`, `min`, `max`                   |
+| `boolean`     | boolean              | `default`                                 |
+| `date`        | ISO string           | `mode: "date" \| "datetime"`              |
+| `select`      | one of `options`     | `options`, `default`                      |
+| `multiselect` | an array of options  | `minItems`, `maxItems`                    |
+| `media`       | a `media` row id     | `accept` — a hint for the picker          |
+| `relation`    | an id, or ids        | `relation("authors", { many: true })`     |
+| `json`        | anything JSON        | use `defineField()` for custom validation |
+| `seoFields()` | four fields at once  | spread into `fields`                      |
+
+`index: true` creates a non-unique, collection-scoped database index on the
+field's value in the `documents` JSON body. It can speed up filtered lookups
+but adds storage and write cost; it is **not** full-text search. `unique: true`
+creates a unique index (no need to also set `index: true`). Localized values
+cannot be unique and are not indexed by the current implementation.
+
+`admin.placeholder` is used by text, textarea, rich-text and select controls;
+media and other controls ignore it. `admin.hidden` removes the field from the
+shipped form (not from the API). A field with `admin.hidden: true` **cannot**
+have `required: true` — the configuration fails immediately, even if it has a
+default. The removed `width`, `position` and `condition` options are rejected.
+None of these options is access control.
+
+## Slugs
+
+There is no `slug` type. A URL handle is a `text` field with the constraints
+you actually want on it:
+
+```ts
+handle: text({
+  unique: true,
+  pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+  generate: ({ fields }) => slugify(String(fields.title ?? "")),
+  aiGenerate: {
+    label: "Suggest slug with AI",
+    prompt: "Suggest a short URL handle from the title.",
+    context: ["title"],
+  },
+});
+```
+
+`generate` is a **server-side function**, called by a button beside the field
+using the current draft. `fields` contains readable sibling values in the
+current locale. Its result is validated against the target field schema,
+inserted into the form, and is **not saved** until the editor saves. The second
+button (`aiGenerate`) uses AI and shows a preview first. Both can coexist.
+Neither sends a server function to the browser. A generated slug still needs a
+save to check `unique` against the database.
+
+If the value must always be produced, even for CLI/import/API writes that do
+not press a form button, use a [hook](./hooks.mdx) instead:
+
+```ts
+databaseHooks: {
+  posts: {
+    create: {
+      before: async ({ data }) => ({
+        data: { ...data, handle: data.handle ?? slugify(data.title) },
+      }),
+    },
+  },
+}
+```
+
+## Your own field
+
+`defineField()` is public and the built-in types use nothing else:
+
+```ts
+import { defineField } from "@heyo-sh/heyo-cms";
+import { z } from "zod";
+
+export const stars = defineField<number, { max?: number }>({
+  name: "stars",
+  optionsSchema: z.object({ max: z.number().optional() }).passthrough(),
+  schema: (options) =>
+    z
+      .number()
+      .int()
+      .min(0)
+      .max(options.max ?? 5),
+  column: () => ({ type: "integer" }),
+});
+```
+
+`schema` validates, `column` tells the schema layer what to migrate, and the
+zod schema is what `GET /openapi.json` documents — so validation and
+documentation cannot disagree. The panel renders an unknown field with the
+control implied by its column type until a plugin ships one through
+`admin.scripts`.

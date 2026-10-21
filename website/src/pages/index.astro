@@ -1,0 +1,22 @@
+---
+import { AstroDocsApp } from "../components/docs-app";
+import DocsLayout from "../layouts/docs-layout.astro";
+import { docsContext } from "../lib/docs";
+import { docsSeo, siteSeo } from "@heyo-sh/heyo-docs/seo";
+
+const pathname = "/";
+const context = docsContext(pathname);
+const exists = Boolean(context.page || context.endpoint);
+if (!exists) Astro.response.status = 404;
+const seo = exists
+  ? docsSeo({ ...context, pathname })
+  : {
+      title: `Not found | ${context.config.title}`,
+      description: siteSeo(context.config).description,
+      structuredData: siteSeo(context.config).structuredData,
+    };
+---
+
+<DocsLayout {...seo} robots={exists ? "index, follow" : "noindex"}>
+  <AstroDocsApp client:load pathname={pathname} />
+</DocsLayout>

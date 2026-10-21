@@ -1,0 +1,118 @@
+---
+title: Configuration
+description: heyo-cms.config.ts — every section, what it decides, and what it does not.
+---
+
+# Configuration
+
+`heyo-cms.config.ts` is the whole content model and the whole deployment
+contract. It is validated while the module is loading, so a mistake is a
+start-up error naming the key rather than a 500 on the request that reached it.
+
+```ts
+import {
+  defineCollection,
+  defineGlobal,
+  heyoCms,
+  permits,
+} from "@heyo-sh/heyo-cms";
+import { adminAssets } from "@heyo-sh/heyo-cms-admin";
+import { cmsUsers } from "@heyo-sh/heyo-cms/auth";
+import { richText, select, text } from "@heyo-sh/heyo-cms/fields";
+import { postgres } from "@heyo-sh/heyo-cms/postgres";
+
+export const cms = heyoCms({
+  database: postgres(process.env.DATABASE_URL!),
+  basePath: "/api/heyo-cms",
+  admin: {
+    path: "/admin",
+    title: "Acme",
+    assets: adminAssets(),
+    auth: cmsUsers({ methods: ["password"] }),
+  },
+  collections: {
+    posts: defineCollection({
+      fields: {
+        title: text({ required: true, localized: true }),
+        handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+        status: select({ options: ["draft", "published"], default: "draft" }),
+        body: richText({ localized: true }),
+      },
+      access: {
+        read: () => true,
+        create: ({ actor }) => permits(actor, "posts:create"),
+      },
+    }),
+  },
+});
+```
+
+## Sections
+
+| Key             | What it decides                                                         |
+| --------------- | ----------------------------------------------------------------------- |
+| `database`      | the adapter: `postgres()`, `mongodb()`, `sqlite()`, `d1()`              |
+| `basePath`      | where the handler is mounted. Default `/api/heyo-cms`                   |
+| `admin`         | the panel's path, title, bundle and **editor authentication**           |
+| `rbac`          | roles as `collection:action` patterns; declaring it changes the default |
+| `i18n`          | the language codes, and which one a missing translation falls back to   |
+| `uploads`       | storage adapter, limits, image processing, retention                    |
+| `ai`            | provider credentials, the default model, the panel-wide assistant       |
+| `webhooks`      | signing, delivery, retries, whether the panel manages them              |
+| `trash`         | whether a delete is soft, and for how long                              |
+| `collections`   | your content types                                                      |
+| `globals`       | singletons: one row, no `find`, no `create`, same hooks                 |
+| `databaseHooks` | `before`/`after` around every write                                     |
+| `hooks`         | HTTP-level `before`/`after`: rate limits, headers                       |
+| `plugins`       | collections, fields, routes, hooks and migrations from a package        |
+| `telemetry`     | `{ enabled: false }` turns the CLI's reporting off                      |
+| `migrations`    | where generated migrations are written. Default `./migrations`          |
+
+## What the instance gives back
+
+```ts
+cms.handler; // (request: Request) => Promise<Response> — the whole HTTP surface
+cms.api; // the local API, typed from `collections`
+cms.globals; // the singletons
+cms.auth; // sessions, invitations, API keys, roles
+cms.media; // upload, library, variants, the lifecycle
+cms.webhooks; // subscriptions, deliveries, replay
+cms.trash; // cross-collection bin: list, restore, purge
+cms.jobs; // the sweeps: scheduled changes, purge, media collection
+cms.locales; // the configured languages, named
+cms.activity; // the audit trail, read-only
+cms.inspect(); // schema, hook order, routes, plugins — printed, not implied
+```
+
+`cms.inspect()` is the antidote to a router you cannot see: it lists every
+registered route with its method, source (`core` or a plugin id) and how many
+middleware wrap it.
+
+## Browser client
+
+Generated projects include both `heyo-cms.client.ts` and a type-only
+`heyo-cms.client.d.ts`, so browser code needs no server-config import or URL
+for the standard mount:
+
+```ts
+import { cmsClient } from "./heyo-cms.client";
+
+await cmsClient.posts.find();
+```
+
+The declaration registers `typeof cms` with `@heyo-sh/heyo-cms/client`; it is
+never bundled and TypeScript follows field changes in `heyo-cms.config.ts`
+without rerunning a generator. For another mount or a program with multiple
+CMS instances, use `heyoCmsClient({ baseUrl })` or
+`heyoCmsClient<typeof otherCms>()` respectively.
+
+## What is deliberately absent
+
+| Not here                        | Why                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `drafts`, `publish()`, versions | status is a field; version history is a separate paid package             |
+| `push` mode                     | a schema change that leaves no file is one nobody can review              |
+| `seo()` plugin                  | SEO is a set of fields: `fields: { ...seoFields() }`                      |
+| `audit()` plugin                | the activity log is built in                                              |
+| `apiKeys()` plugin              | keys are an authentication method, in `cmsUsers({ apiKeys })`             |
+| autosave                        | a model or a stray keystroke writing silently is worse than a save button |
