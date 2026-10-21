@@ -28,6 +28,27 @@ export function createId(prefix: string): string {
 }
 
 /**
+ * An id that sorts by creation order even inside one millisecond.
+ *
+ * `createId()` breaks a tie randomly, which is fine for a document and wrong
+ * for the outbox: section 7 guarantees delivery order per document, and two
+ * events written by the same transaction routinely land in the same
+ * millisecond. A process-local counter makes the tie deterministic; across
+ * processes the timestamp still orders them.
+ */
+let sequence = 0;
+
+export function createOrderedId(prefix: string): string {
+  sequence = (sequence + 1) % 60_466_175; // 36^5 - 1
+  const time = Date.now().toString(36).padStart(9, "0");
+  const counter = sequence.toString(36).padStart(5, "0");
+  const random = crypto.getRandomValues(new Uint8Array(3));
+  let suffix = "";
+  for (const byte of random) suffix += alphabet[byte % alphabet.length];
+  return `${prefix}_${time}${counter}${suffix}`;
+}
+
+/**
  * A fingerprint of a migration file.
  *
  * FNV-1a, not a cryptographic hash: this answers "has this file changed since

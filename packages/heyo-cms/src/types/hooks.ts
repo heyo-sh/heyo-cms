@@ -131,10 +131,23 @@ export interface HttpHookContext {
   /** Path with `basePath` already stripped, as the router sees it. */
   path: string;
   method: string;
+  /**
+   * The request's headers in a `before` hook, the response's in an `after`
+   * one — which is the only pair that is useful: before the route there is no
+   * response to decorate, and after it the request's headers are already in
+   * `request`.
+   */
   headers: Headers;
+  /** The response status. Present in an `after` hook only. */
   status?: number;
+  /**
+   * Who is calling, resolved from the cookie or the `Authorization` header
+   * before any hook runs: a rate limiter that cannot tell an editor from a
+   * stranger is a rate limiter on the wrong thing.
+   */
   actor: Actor | null;
   cms: CmsInstance;
+  /** One object per request, shared by the `before` and `after` hooks. */
   meta: Record<string, unknown>;
 }
 

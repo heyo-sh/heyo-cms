@@ -287,16 +287,33 @@ export class MongoDatabaseAdapter implements DatabaseAdapter {
     if (mutation.kind === "update") {
       const filter = this.filter(mutation.table, mutation.where);
       const update = this.encode(mutation.set);
+      // Which rows matched, captured *before* the write. Reading them back
+      // through the original filter afterwards would be wrong for any
+      // conditional update: `WHERE revision = 17 SET revision = 18` matches
+      // nothing once it has run, and the adapter would report that it changed
+      // zero rows when it had just changed one.
+      const matched =
+        mutation.returning === false
+          ? []
+          : ((await collection
+              .find(filter, { projection: { _id: 1 } })
+              .toArray()) as { _id: unknown }[]);
+
       const result = await collection.updateMany(filter, { $set: update });
       const count = result.modifiedCount ?? result.matchedCount ?? 0;
       if (mutation.returning === false) return { rows: [], count };
 
       // Mongo reports counts, not documents. Reading the matched rows back is
       // one extra round trip for the same guarantee a SQL `RETURNING` gives.
-      const rows = await collection.find(filter).toArray();
+      const rows =
+        matched.length === 0
+          ? []
+          : await collection
+              .find({ _id: { $in: matched.map((row) => row._id) } })
+              .toArray();
       return {
         rows: rows.map((row) => this.decode(mutation.table, row)),
-        count: rows.length,
+        count: Math.max(count, rows.length),
       };
     }
 
@@ -424,12 +441,18 @@ export class MongoDatabaseAdapter implements DatabaseAdapter {
     if (where.kind === "not") {
       return { $nor: [this.filter(table, where.condition)] };
     }
-    return {
-      [this.path(table, where.path)]: this.condition(
-        where.operator,
-        where.value,
-      ),
-    };
+    const path = this.path(table, where.path);
+    const documentColumn = this.documentColumns.get(table);
+    // `date` fields are ISO strings inside `data`, even though the HTTP
+    // parser revives a filter value as a Date so SQL can compare it to a
+    // timestamp. Mongo stores that document body directly, so convert only a
+    // document-path Date back to its wire/storage representation; real system
+    // timestamp columns remain Date values.
+    const value =
+      documentColumn !== undefined && path.startsWith(`${documentColumn}.`)
+        ? mongoDocumentFilterValue(where.value)
+        : where.value;
+    return { [path]: this.condition(where.operator, value) };
   }
 
   private condition(
@@ -531,6 +554,17 @@ function readPath(value: unknown, path: string[]): unknown {
     current = (current as Record<string, unknown>)[segment];
   }
   return current ?? null;
+}
+
+function mongoDocumentFilterValue(
+  value: ColumnValue | ColumnValue[],
+): ColumnValue | ColumnValue[] {
+  if (value instanceof Date) return value.toISOString();
+  return Array.isArray(value)
+    ? value.map((entry) =>
+        entry instanceof Date ? entry.toISOString() : entry,
+      )
+    : value;
 }
 
 /** Translates a SQL `LIKE` pattern into the equivalent anchored regex. */

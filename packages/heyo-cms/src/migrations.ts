@@ -7,10 +7,16 @@ import { migrationName } from "./schema/describe";
 import { emptySnapshot } from "./schema/snapshot";
 import { stableStringify } from "./schema/plan";
 import type { DatabaseAdapter } from "./types/database";
-import type { MigrationArtifact, SchemaSnapshot } from "./types/schema";
+import type {
+  MigrationArtifact,
+  MigrationStep,
+  SchemaSnapshot,
+} from "./types/schema";
 
 /** The file that records what the last `generate` believed the schema to be. */
 const snapshotFile = "meta/snapshot.json";
+/** Which plugin migrations have already been written into this directory. */
+const pluginLogFile = "meta/plugins.json";
 
 export interface StoredMigration {
   id: string;
@@ -50,6 +56,38 @@ export class MigrationStore {
     await writeFile(
       join(this.directory, snapshotFile),
       `${JSON.stringify(snapshot, null, 2)}\n`,
+      "utf8",
+    );
+  }
+
+  /**
+   * Plugin migrations already turned into files.
+   *
+   * A separate log from the schema snapshot because they are a different
+   * kind of fact: the snapshot says what the schema looked like, this says
+   * which hand-written step lists have been emitted. Keyed `plugin:id`, so
+   * two plugins may use the same migration id without colliding.
+   */
+  async readPluginLog(): Promise<string[]> {
+    try {
+      const content = await readFile(
+        join(this.directory, pluginLogFile),
+        "utf8",
+      );
+      const parsed: unknown = JSON.parse(content);
+      return Array.isArray(parsed)
+        ? parsed.filter((entry): entry is string => typeof entry === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async writePluginLog(entries: string[]): Promise<void> {
+    await mkdir(join(this.directory, "meta"), { recursive: true });
+    await writeFile(
+      join(this.directory, pluginLogFile),
+      `${JSON.stringify(entries, null, 2)}\n`,
       "utf8",
     );
   }
@@ -115,6 +153,68 @@ export interface GenerateResult {
   id?: string;
   file?: string;
   summary: string[];
+  /** Plugin migrations written by this run, newest last. */
+  plugins?: { id: string; file: string }[];
+}
+
+/** A plugin's migration, with the plugin it came from. */
+export interface PluginMigrationInput {
+  plugin: string;
+  id: string;
+  steps: MigrationStep[];
+}
+
+/**
+ * Plugin migrations, written as ordinary files.
+ *
+ * A plugin ships neutral steps rather than SQL (section 2), and this is
+ * where they become something a human can review in a pull request and a
+ * `migrate` can apply in order. They are written *after* the schema diff of
+ * the same run, because that is the only order that works: a plugin's steps
+ * talk about tables — its own, from `schema.tables`, or `documents` — and
+ * those tables are created by the diff.
+ *
+ * The log is what makes it idempotent. Running `generate` twice must not
+ * write the same backfill twice, and the plugin cannot know whether it
+ * already has.
+ */
+export async function generatePluginMigrations(options: {
+  adapter: DatabaseAdapter;
+  store: MigrationStore;
+  plugins: PluginMigrationInput[];
+}): Promise<{ id: string; file: string }[]> {
+  const { adapter, store } = options;
+  if (options.plugins.length === 0) return [];
+
+  const log = await store.readPluginLog();
+  const written: { id: string; file: string }[] = [];
+  const seen = new Set(log);
+
+  for (const migration of options.plugins) {
+    const key = `${migration.plugin}:${migration.id}`;
+    if (seen.has(key)) continue;
+    if (migration.steps.length === 0) {
+      seen.add(key);
+      continue;
+    }
+
+    const sequence = await store.nextSequence();
+    const id = `${sequence}_${slug(migration.plugin)}_${slug(migration.id)}`;
+    const artifact = adapter.render(migration.steps, id);
+    const file = await store.write(artifact);
+    seen.add(key);
+    written.push({ id, file });
+  }
+
+  if (written.length > 0) await store.writePluginLog([...seen]);
+  return written;
+}
+
+function slug(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
 }
 
 /**
@@ -130,20 +230,44 @@ export async function generateMigration(options: {
   store: MigrationStore;
   target: SchemaSnapshot;
   name?: string;
+  /** Steps the installed plugins ship, written before the schema diff. */
+  plugins?: PluginMigrationInput[];
 }): Promise<GenerateResult> {
   const { adapter, store, target } = options;
   const previous = await store.readSnapshot();
   const steps = adapter.plan(previous, target);
 
-  if (steps.length === 0) return { created: false, summary: [] };
+  let created: { id: string; file: string; summary: string[] } | undefined;
+  if (steps.length > 0) {
+    const sequence = await store.nextSequence();
+    const id = `${sequence}_${options.name ?? migrationName(steps)}`;
+    const artifact = adapter.render(steps, id);
+    const file = await store.write(artifact);
+    await store.writeSnapshot(target);
+    created = { id, file, summary: artifact.summary };
+  }
 
-  const sequence = await store.nextSequence();
-  const id = `${sequence}_${options.name ?? migrationName(steps)}`;
-  const artifact = adapter.render(steps, id);
-  const file = await store.write(artifact);
-  await store.writeSnapshot(target);
+  const plugins = await generatePluginMigrations({
+    adapter,
+    store,
+    plugins: options.plugins ?? [],
+  });
 
-  return { created: true, id, file, summary: artifact.summary };
+  if (!created) {
+    return {
+      created: false,
+      summary: [],
+      ...(plugins.length === 0 ? {} : { plugins }),
+    };
+  }
+
+  return {
+    created: true,
+    id: created.id,
+    file: created.file,
+    summary: created.summary,
+    ...(plugins.length === 0 ? {} : { plugins }),
+  };
 }
 
 export interface MigrateResult {

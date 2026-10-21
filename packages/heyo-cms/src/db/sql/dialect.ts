@@ -146,8 +146,16 @@ export const sqliteDialect: SqlDialect = {
   quote: identifier,
   columnType: (column) =>
     column.array === true ? "TEXT" : sqliteTypes[column.type],
-  jsonExtract(column, path) {
-    return `json_extract(${identifier(column)}, '${jsonLiteralPath(path)}')`;
+  jsonExtract(column, path, type) {
+    const extracted = `json_extract(${identifier(column)}, '${jsonLiteralPath(path)}')`;
+    // Collection date fields are ISO strings inside the document JSON, while
+    // a real SQLite timestamp is epoch milliseconds. A direct TEXT > INTEGER
+    // comparison follows SQLite's storage-class ordering (and says every
+    // string is greater), so date filters on a JSON field must normalise the
+    // extracted ISO value at the comparison boundary.
+    return type === "timestamp"
+      ? `CAST(ROUND((julianday(${extracted}) - 2440587.5) * 86400000) AS INTEGER)`
+      : extracted;
   },
   jsonArrayMembership(column, path, placeholder) {
     const target =

@@ -42,6 +42,23 @@ export interface StorageAdapter {
   delete(keys: string[]): Promise<void>;
   url(key: string, options?: SignedUrlOptions): string;
   head?(key: string): Promise<StoredObject | null>;
+  /**
+   * A time-limited URL for a bucket that is not public.
+   *
+   * Separate from `url()` and asynchronous because signing is cryptography:
+   * making `url()` async instead would make the common case — a public file
+   * on a CDN — pay for a feature it does not use, in every template that
+   * renders an image.
+   */
+  signedUrl?(key: string, options?: SignedUrlOptions): Promise<string>;
+  /**
+   * Where new objects should live, given the file being stored.
+   *
+   * The adapter decides because the layout belongs to the bucket: a lifecycle
+   * rule that archives `2024/` only works if the adapter that was configured
+   * with it is the one choosing prefixes (section 6).
+   */
+  readonly prefix?: (file: { id: string; filename: string }) => string;
 }
 
 export type StorageAdapterFactory = () =>

@@ -13,9 +13,21 @@ export class CmsError extends Error {
 
   constructor(
     message: string,
-    options: { status?: number; code?: string; details?: unknown } = {},
+    options: {
+      status?: number;
+      code?: string;
+      details?: unknown;
+      /**
+       * The error this one replaces, for the operator's log.
+       *
+       * `details` is part of the response and `cause` never is: when a
+       * provider or a driver fails, the caller gets a sentence and a code
+       * while the original stack stays where somebody debugging can reach it.
+       */
+      cause?: unknown;
+    } = {},
   ) {
-    super(message);
+    super(message, options.cause === undefined ? undefined : { cause: options.cause }); // prettier-ignore
     this.name = "CmsError";
     this.status = options.status ?? 400;
     this.code = options.code ?? "cms_error";

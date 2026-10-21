@@ -14,6 +14,14 @@ export type DocumentEventType =
   | "document.field.changed"
   | "document.scheduled"
   | "document.schedule.applied"
+  /**
+   * The one addition to the catalogue in section 7.
+   *
+   * A cancellation reported as `document.scheduled` with an empty payload
+   * would make every subscriber to "something was scheduled" tell its users
+   * about a schedule that no longer exists.
+   */
+  | "document.schedule.cancelled"
   | "document.trashed"
   | "document.restored"
   | "document.purged";
@@ -26,10 +34,27 @@ export type MediaEventType =
   | "media.purged"
   | "media.processing.failed";
 
-export type LocaleEventType =
-  "locale.created" | "locale.deleted" | "translation.completed";
+export type LocaleEventType = "translation.completed";
 
-export type AiEventType = "ai.task.completed" | "ai.task.failed";
+/**
+ * What the AI runtime reports.
+ *
+ * `ai.task.*` is one field action. `ai.agent.*` is one run of the panel-wide
+ * assistant, and `ai.agent.mutation.applied` is one write inside such a run —
+ * emitted *in addition to* the ordinary `document.updated`, not instead of
+ * it, so a subscriber that cares about content hears it the usual way and a
+ * subscriber auditing the agent can correlate by `runId`.
+ *
+ * None of them carry the prompt, the reply or the record. They carry the run
+ * id, the model, the usage, the duration, the tool names and the fields that
+ * changed — which is what an audit needs and all an audit may have.
+ */
+export type AiEventType =
+  | "ai.task.completed"
+  | "ai.task.failed"
+  | "ai.agent.completed"
+  | "ai.agent.failed"
+  | "ai.agent.mutation.applied";
 
 export type AccessEventType =
   | "user.invited"

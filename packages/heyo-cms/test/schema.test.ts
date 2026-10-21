@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { defineCollection, heyoCms } from "../src/config";
-import { boolean, number, select, slug, text } from "../src/fields";
+import { boolean, number, select, text } from "../src/fields";
 import { describeStep, migrationName } from "../src/schema/describe";
 import { planMigration, stableStringify } from "../src/schema/plan";
 import { emptySnapshot } from "../src/schema/snapshot";
@@ -23,7 +23,6 @@ describe("schema snapshot", () => {
     const names = systemTableNames();
     for (const table of [
       "documents",
-      "locales",
       "cms_users",
       "cms_sessions",
       "cms_api_keys",
@@ -41,8 +40,14 @@ describe("schema snapshot", () => {
   });
 
   test("is deterministic: the same configuration produces the same bytes", () => {
-    const first = schemaOf({ title: text({}), handle: slug({}) } as never);
-    const second = schemaOf({ handle: slug({}), title: text({}) } as never);
+    const first = schemaOf({
+      title: text({}),
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+    } as never);
+    const second = schemaOf({
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+      title: text({}),
+    } as never);
     // Field order in the configuration must not reach the snapshot, or a
     // reordered file would generate an empty migration.
     expect(stableStringify(first)).toBe(stableStringify(second));
@@ -85,13 +90,19 @@ describe("planMigration", () => {
   });
 
   test("an unchanged configuration plans nothing", () => {
-    const schema = schemaOf({ title: text({}), handle: slug({}) } as never);
+    const schema = schemaOf({
+      title: text({}),
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+    } as never);
     expect(planMigration(schema, schema)).toEqual([]);
   });
 
   test("adding an indexed field is one readable index step", () => {
     const before = schemaOf({ title: text({}) } as never);
-    const after = schemaOf({ title: text({}), handle: slug({}) } as never);
+    const after = schemaOf({
+      title: text({}),
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+    } as never);
 
     const steps = planMigration(before, after);
     expect(steps.map(describeStep)).toEqual([
@@ -154,7 +165,14 @@ describe("planMigration", () => {
       collections: {
         posts: defineCollection({ fields: { title: text({}) } }),
         pages: defineCollection({
-          fields: { title: text({}), handle: slug({}) },
+          fields: {
+            title: text({}),
+            handle: text({
+              unique: true,
+              index: true,
+              pattern: "^[a-z0-9-]+$",
+            }),
+          },
         }),
       },
     }).schema;
@@ -168,7 +186,7 @@ describe("planMigration", () => {
   test("steps are grouped into phases, not emitted in discovery order", () => {
     const before = schemaOf({
       title: text({}),
-      handle: slug({}),
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
       legacy: number({}),
     } as never);
     const after = schemaOf({
@@ -214,7 +232,10 @@ describe("migrationName", () => {
     );
 
     const before = schemaOf({ title: text({}) } as never);
-    const after = schemaOf({ title: text({}), handle: slug({}) } as never);
+    const after = schemaOf({
+      title: text({}),
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+    } as never);
     expect(migrationName(planMigration(before, after))).toBe(
       "index_documents_posts_handle",
     );

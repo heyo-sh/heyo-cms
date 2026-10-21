@@ -88,7 +88,30 @@ export function defineField<TValue, TOptions extends FieldOptions>(
       ? parseOptions(type.name, type.optionsSchema, given)
       : given;
 
+    if (given.admin !== undefined) {
+      for (const key of Object.keys(given.admin)) {
+        if (key !== "hidden" && key !== "placeholder") {
+          throw new CmsConfigError(
+            `fields.${type.name}.admin.${key}`,
+            "unsupported admin option; use only hidden or placeholder",
+          );
+        }
+      }
+    }
+    if (given.generate !== undefined && typeof given.generate !== "function") {
+      throw new CmsConfigError(
+        `fields.${type.name}.generate`,
+        "must be a function",
+      );
+    }
+
     const required = given.required === true;
+    if (required && given.admin?.hidden === true) {
+      throw new CmsConfigError(
+        `fields.${type.name}.admin.hidden`,
+        "a hidden field cannot be required; remove required or show the field",
+      );
+    }
     const localized = given.localized === true;
     const column = type.column(parsed as TOptions);
 
@@ -104,6 +127,22 @@ export function defineField<TValue, TOptions extends FieldOptions>(
     }
 
     validateAiActions(type.name, type.aiActions, given.ai);
+    if (given.aiGenerate !== undefined) {
+      if (given.ai?.generate !== undefined) {
+        throw new CmsConfigError(
+          `fields.${type.name}.aiGenerate`,
+          "choose either aiGenerate or the legacy ai.generate, not both",
+        );
+      }
+      if (
+        !["text", "textarea", "richText", "email", "url"].includes(type.name)
+      ) {
+        throw new CmsConfigError(
+          `fields.${type.name}.aiGenerate`,
+          "generation currently supports text, textarea, richText, email and url fields",
+        );
+      }
+    }
 
     const definition: FieldDefinition<FieldValue<TValue, TGiven>> = {
       type: type.name,
@@ -122,6 +161,10 @@ export function defineField<TValue, TOptions extends FieldOptions>(
       localized,
       required,
       ...(given.default === undefined ? {} : { defaultValue: given.default }),
+      ...(given.generate === undefined ? {} : { generate: given.generate }),
+      ...(given.aiGenerate === undefined
+        ? {}
+        : { aiGenerate: given.aiGenerate }),
       ...(given.ai === undefined ? {} : { ai: given.ai }),
       ...(given.access === undefined ? {} : { access: given.access }),
       ...(given.admin === undefined ? {} : { admin: given.admin }),
