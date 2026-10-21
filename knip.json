@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreWorkspaces": ["examples/*"],
+  "ignore": ["packages/create-heyo-cms/templates/**"],
   "workspaces": {
     ".": {
       "entry": ["scripts/*.ts"],
@@ -18,6 +19,19 @@
         "src/cli.ts",
         "src/auth.ts",
         "src/uploads.ts",
+        "src/editor.ts",
+        "src/ai.ts",
+        "src/webhooks.ts",
+        "src/jobs.ts",
+        "src/http.ts",
+        "src/client.ts",
+        "src/content.ts",
+        "src/telemetry.ts",
+        "src/adapters/next.ts",
+        "src/adapters/astro.ts",
+        "src/adapters/react-router.ts",
+        "src/adapters/sveltekit.ts",
+        "src/adapters/nuxt.ts",
         "src/db/postgres.ts",
         "src/db/sqlite.ts",
         "src/db/d1.ts",
@@ -28,11 +42,27 @@
       "project": ["src/**/*.ts", "test/**/*.ts"],
       "ignoreDependencies": ["pg"]
     },
+    "website": {
+      "ignoreDependencies": ["shadcn", "tw-animate-css", "tailwindcss"]
+    },
     "packages/create-heyo-cms": {
-      "project": ["src/**/*.ts"]
+      "entry": ["src/index.ts", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "packages/heyo-cms-admin": {
-      "project": ["src/**/*.ts"]
+      "entry": [
+        "src/index.ts",
+        "src/app/main.tsx",
+        "test/**/*.test.ts",
+        "test/**/*.test.tsx"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "src/**/*.css",
+        "test/**/*.ts",
+        "test/**/*.tsx"
+      ]
     }
   }
 }

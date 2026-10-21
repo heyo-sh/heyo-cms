@@ -3,14 +3,15 @@
 Packages are versioned with [Changesets](https://github.com/changesets/changesets)
 and published only by GitHub Actions.
 
-| Package                    | Contents                                 | Published    |
-| -------------------------- | ---------------------------------------- | ------------ |
-| `@heyo-sh/heyo-cms`        | contracts, fields, schema, adapters, CLI | from stage 3 |
-| `@heyo-sh/heyo-cms-admin`  | admin panel                              | stage 8      |
-| `@heyo-sh/create-heyo-cms` | project generator and templates          | stage 10     |
+| Package                    | Contents                                 | Published       |
+| -------------------------- | ---------------------------------------- | --------------- |
+| `@heyo-sh/heyo-cms`        | engine, adapters, CLI                    | 0.1.0 candidate |
+| `@heyo-sh/heyo-cms-admin`  | bundled panel                            | 0.1.0 candidate |
+| `@heyo-sh/create-heyo-cms` | generator, templates, initial migrations | 0.1.0 candidate |
 
-Only `@heyo-sh/heyo-cms` is publishable today. The other two are `private`
-until they do something, which also keeps Changesets from versioning them.
+All three packages are MIT and publishable. Changesets has prepared the 0.1.0
+versions and changelogs; this does not mean they have been published. The
+private `website` package is the heyo-docs site and is never published to npm.
 
 ## One-time repository setup
 
@@ -44,10 +45,25 @@ until they do something, which also keeps Changesets from versioning them.
 ## Before a release
 
 1. `bun run quality` — lint, knip, typecheck, tests, build.
-2. `bun run example smoke` — every scaffolded example, against a real database.
-3. `bun pm pack --dry-run` in `packages/heyo-cms`, confirming `dist`,
-   `README.md` and `LICENSE` are present and that no `.env`, database file or
-   source map of a private file is included.
+2. `bun run docs:build` and `bun run templates --check`.
+3. Move existing generated `examples/{next,astro,react-router}-{vercel,cloudflare}`
+   aside before validation, so the harness regenerates the current templates.
+   `bun run example smoke` tests each against a real database and dev server;
+   `bun run example build` checks production bundles (including OpenNext).
+   Generated examples install local release tarballs independently; their
+   dependency locks do not enter the root workspace lockfile.
+4. In the three generated Cloudflare projects, `bunx wrangler deploy --dry-run`
+   checks Worker packaging without publishing. Live deployments, remote D1,
+   MongoDB and credentialed S3/R2 still require account-specific verification.
+5. `npm pack --dry-run --json` in **each** publishable package. Verify `dist`,
+   `README.md`, `LICENSE`, all generator layers, SQL/JSON migrations and
+   `meta/snapshot.json`. No credentials, local database or private source maps.
+6. Install the resulting tarballs outside the workspace, check the Node CLI
+   and generator `--help`, and scaffold with `--no-install`. Public peer
+   dependencies must use semver ranges, not `workspace:*` (npm does not rewrite
+   that protocol when packing). Dev-only workspace dependencies stay local.
+7. Run `bun install --frozen-lockfile` on a clean checkout. Approve publication
+   only after all checks and credentials/trusted-publisher setup are complete.
 
 Migrations deserve particular care: a published `plan()` that is not
 deterministic produces a different migration on every machine, and a `render()`
