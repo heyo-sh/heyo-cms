@@ -1,0 +1,2 @@
+import { mongodb } from "@heyo-sh/heyo-cms/mongodb";
+import type { DatabaseAdapterFactory } from "@heyo-sh/heyo-cms/types";

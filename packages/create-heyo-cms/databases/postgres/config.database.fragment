@@ -1,0 +1,17 @@
+/**
+ * Postgres.
+ *
+ * A factory rather than an adapter, and deliberately: a connection has no
+ * business existing while this module is being imported. A build, a `next
+ * dev` that never touches a page, and `heyo-cms --help` all load this file
+ * and none of them should open a socket.
+ */
+const database: DatabaseAdapterFactory = () => {
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      "DATABASE_URL is not set. Copy .env.example to .env and point it at a Postgres.",
+    );
+  }
+  return (postgres(url) as DatabaseAdapterFactory)();
+};

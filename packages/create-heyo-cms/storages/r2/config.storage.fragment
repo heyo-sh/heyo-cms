@@ -1,0 +1,63 @@
+/**
+ * Cloudflare R2 — through a binding inside a Worker, through its
+ * S3-compatible API everywhere else.
+ *
+ * Both, because both are needed. A Worker has a bucket handed to it by the
+ * runtime and no credentials; the CLI on your laptop (`heyo-cms import`) has
+ * credentials and no runtime. The adapter is the same five methods either
+ * way, so nothing above this line knows which one answered.
+ *
+ * A factory, so neither branch is taken while this module is being imported:
+ * a build that has no bucket and no keys still has to load the configuration.
+ */
+const storage: StorageConfig = async () => {
+  const binding = await bucketBinding();
+  if (binding) return r2(binding)();
+
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const bucket = process.env.R2_BUCKET;
+  if (!accountId || !bucket) {
+    throw new Error(
+      "R2 is not configured: set R2_ACCOUNT_ID and R2_BUCKET (and the keys), or run inside a Worker with an R2 binding called MEDIA.",
+    );
+  }
+
+  return r2({
+    accountId,
+    bucket,
+    accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
+    // A bucket is private until you put a domain in front of it.
+    ...(process.env.R2_PUBLIC_URL ? { publicUrl: process.env.R2_PUBLIC_URL } : {}), // prettier-ignore
+  })();
+};
+
+/**
+ * The bucket, from whichever half of the runtime has it.
+ *
+ * Named for the bucket rather than for the runtime because the database
+ * layer has a function of its own that answers the same question about its
+ * own binding, and a D1 project with an R2 bucket assembles both into this
+ * one file.
+ *
+ * In a deployed Worker `cloudflare:workers` resolves and carries the
+ * bindings. In `next dev` or `astro dev` it does not — those run in Node with
+ * a proxy to the real bindings — so the mount hands the request's `env` over
+ * through a global instead. Two sources, one answer, and nothing above this
+ * function has to know which it was.
+ */
+async function bucketBinding(): Promise<R2Binding | undefined> {
+  const injected =
+    (globalThis as { __heyoCloudflareEnv?: Record<string, unknown> }) // prettier-ignore
+    .__heyoCloudflareEnv;
+  if (injected?.MEDIA) return injected.MEDIA as R2Binding;
+
+  try {
+    const module = (await import(/* @vite-ignore */ "cloudflare:workers")) as {
+      env?: Record<string, unknown>;
+    };
+    return module.env?.MEDIA as R2Binding | undefined;
+  } catch {
+    return undefined;
+  }
+}

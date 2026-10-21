@@ -1,0 +1,162 @@
+/**
+ * Cloudflare D1, and the same file when there is no Worker.
+ *
+ * Inside a Worker the binding comes from the runtime — `wrangler.json`
+ * declares it, the platform injects it, and it does not exist a moment
+ * earlier, which is why this is a factory. Outside one (the CLI: `heyo-cms
+ * generate`, `seed`, `import`, `export`) there is no binding at all, so the
+ * same SQLite file Wrangler keeps under `.wrangler/state` is opened directly.
+ *
+ * That second branch is not a convenience: D1 is SQLite, the dialect is
+ * identical, and without it a D1 project could not generate a migration or
+ * seed itself without deploying first.
+ */
+const database: DatabaseAdapterFactory = async () => {
+  const binding = await workerBinding();
+  if (binding) return d1(binding);
+  if (process.env.HEYO_D1_REMOTE === "1") return d1(remoteD1());
+
+  return sqlite(await openLocalD1(), { id: "d1" });
+};
+
+/**
+ * Opens Wrangler's local database with whichever SQLite this runtime has.
+ *
+ * The specifiers are written out literally rather than looped over, which is
+ * not a style choice: a bundler cannot follow `import(variable)`, and the
+ * framework dev servers bundle this file. The same loop in the adapter is
+ * what `no SQLite is available in this runtime` comes from inside a webpack
+ * build, and there is nothing wrong with the runtime at all.
+ */
+async function openLocalD1(): Promise<SqliteDatabase> {
+  const file = await localD1File();
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    return new DatabaseSync(file) as unknown as SqliteDatabase;
+  } catch {
+    const { Database } = (await import("bun:sqlite")) as unknown as {
+      Database: new (path: string) => SqliteDatabase;
+    };
+    return new Database(file);
+  }
+}
+
+/**
+ * The binding, when this is running in a Worker.
+ *
+ * `cloudflare:workers` only resolves inside the Workers runtime, so the
+ * import is dynamic and its failure is the ordinary answer on Node rather
+ * than an error.
+ */
+async function workerBinding(): Promise<D1Database | undefined> {
+  // `next dev` and `astro dev` run in Node with a proxy to the real local
+  // bindings, so `cloudflare:workers` does not resolve there; the mount hands
+  // the request's `env` over through this global instead.
+  const injected =
+    (globalThis as { __heyoCloudflareEnv?: Record<string, unknown> }) // prettier-ignore
+    .__heyoCloudflareEnv;
+  if (injected?.DB) return injected.DB as D1Database;
+
+  try {
+    const module = (await import(/* @vite-ignore */ "cloudflare:workers")) as {
+      env?: Record<string, unknown>;
+    };
+    return module.env?.DB as D1Database | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Wrangler's local D1, found rather than configured.
+ *
+ * Miniflare names the file after a hash of the binding, so the path cannot be
+ * written down; the newest `.sqlite` under its state directory is the one
+ * `wrangler d1 migrations apply --local` wrote.
+ */
+async function localD1File(): Promise<string> {
+  const { readdir, stat } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const root = join(
+    process.cwd(),
+    ".wrangler",
+    "state",
+    "v3",
+    "d1",
+    "miniflare-D1DatabaseObject",
+  );
+
+  let entries: string[];
+  try {
+    entries = (await readdir(root)).filter((name) => name.endsWith(".sqlite"));
+  } catch {
+    entries = [];
+  }
+  if (entries.length === 0) {
+    throw new Error(
+      "No local D1 database yet. Run `wrangler d1 migrations apply DB --local` first.",
+    );
+  }
+
+  const stats = await Promise.all(
+    entries.map(async (name) => ({
+      name,
+      at: (await stat(join(root, name))).mtimeMs,
+    })),
+  );
+  stats.sort((left, right) => right.at - left.at);
+  return join(root, (stats[0] as { name: string }).name);
+}
+
+/** Explicit CLI-only access to production D1; never selected implicitly. */
+function remoteD1(): D1Database {
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const database = process.env.CLOUDFLARE_D1_DATABASE_ID;
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  if (!account || !database || !token) {
+    throw new Error(
+      "HEYO_D1_REMOTE=1 needs CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_D1_DATABASE_ID and CLOUDFLARE_API_TOKEN (D1 Edit permission).",
+    );
+  }
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(account)}/d1/database/${encodeURIComponent(database)}/query`;
+
+  function prepare(sql: string, params: unknown[] = []): D1PreparedStatement {
+    async function query() {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ sql, params }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok)
+        throw new Error(`D1 query failed (HTTP ${response.status}).`);
+      const body = (await response.json()) as {
+        success: boolean;
+        result?: {
+          success: boolean;
+          results?: Record<string, unknown>[];
+          meta?: { changes?: number };
+        }[];
+      };
+      const result = body.result?.[0];
+      if (!body.success || !result?.success)
+        throw new Error(
+          "D1 rejected the query. Check permissions and apply migrations first.",
+        );
+      return result;
+    }
+    return {
+      bind: (...values) => prepare(sql, values),
+      async all<T>() {
+        return { results: (await query()).results as T[] | undefined };
+      },
+      async run() {
+        return { meta: (await query()).meta };
+      },
+    };
+  }
+  return { prepare };
+}

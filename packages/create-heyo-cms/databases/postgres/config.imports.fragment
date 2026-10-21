@@ -1,0 +1,2 @@
+import { postgres } from "@heyo-sh/heyo-cms/postgres";
+import type { DatabaseAdapterFactory } from "@heyo-sh/heyo-cms/types";

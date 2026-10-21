@@ -1,15 +1,53 @@
 {
   "name": "@heyo-sh/create-heyo-cms",
-  "version": "0.0.0",
-  "description": "Project generator for Heyo CMS.",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Create a Heyo CMS project: three frameworks, two deployments, three databases.",
+  "keywords": [
+    "cms",
+    "headless-cms",
+    "create",
+    "scaffold",
+    "next",
+    "astro",
+    "react-router"
+  ],
+  "homepage": "https://heyo.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heyo-sh/heyo-cms.git",
+    "directory": "packages/create-heyo-cms"
+  },
+  "bugs": {
+    "url": "https://github.com/heyo-sh/heyo-cms/issues"
+  },
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "bin": {
-    "create-heyo-cms": "./src/index.ts"
+    "create-heyo-cms": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "deployments",
+    "databases",
+    "storages",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.8.1"
   },
   "scripts": {
-    "build": "echo \"create-heyo-cms is scaffolded in stage 10\"",
-    "typecheck": "tsc -p tsconfig.json"
+    "dev": "bun run build --watch",
+    "build": "bun build src/index.ts --outdir dist --target node --external @clack/prompts && bun run build:types",
+    "build:types": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test"
   }
 }

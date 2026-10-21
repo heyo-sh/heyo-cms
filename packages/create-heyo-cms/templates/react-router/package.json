@@ -1,0 +1,45 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "{{PACKAGE_MANAGER}}",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "db:generate": "heyo-cms generate",
+    "db:migrate": "heyo-cms migrate",
+    "db:status": "heyo-cms status",
+    "create-admin": "heyo-cms create-admin",
+    "seed": "heyo-cms seed",
+    "content:export": "heyo-cms export --out content.ndjson",
+    "content:import": "heyo-cms import content.ndjson"
+  },
+  "dependencies": {
+    "@fontsource-variable/figtree": "5.3.0",
+    "@heyo-sh/heyo-cms": "{{HEYO_CMS_VERSION}}",
+    "@heyo-sh/heyo-cms-admin": "{{HEYO_CMS_VERSION}}",
+    "@heyo-sh/heyo-ui": "0.4.1",
+    "@react-router/node": "7.18.4",
+    "isbot": "5.1.32",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "7.18.4"
+  },
+  "devDependencies": {
+    "@react-router/dev": "7.18.4",
+    "@react-router/serve": "7.18.4",
+    "@types/node": "26.6.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@tailwindcss/vite": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}

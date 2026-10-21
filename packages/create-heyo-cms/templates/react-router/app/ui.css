@@ -1,0 +1,3 @@
+/* Compile heyo-ui's tokens and button utilities with Tailwind. */
+@import "@fontsource-variable/figtree";
+@import "@heyo-sh/heyo-ui";

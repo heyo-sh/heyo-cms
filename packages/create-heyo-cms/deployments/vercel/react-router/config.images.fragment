@@ -1,0 +1,28 @@
+/**
+ * What resizes an uploaded image, and into what.
+ *
+ * This deployment runs on Node, so `sharp` is available and the variants are
+ * rendered here. `convert` and `maxDimensions` promise bytes that do not
+ * exist yet, which is why they need a processor: a configuration that
+ * promised a WebP and had nothing to produce one would fail at upload time.
+ *
+ * Sizes are named rather than free: arbitrary dimensions in a URL are how a
+ * stranger fills a bucket and burns CPU one pixel at a time.
+ */
+const images: ImagesConfig = {
+  processor: sharpImages(),
+  convert: { to: "webp", keep: ["image/gif", "image/svg+xml"] },
+  quality: 82,
+  stripMetadata: true,
+  maxDimensions: { width: 3840, height: 3840 },
+  focalPoint: true,
+  crop: true,
+  variants: {
+    mode: "on-demand",
+    sizes: {
+      thumb: { width: 320, height: 320, fit: "cover" },
+      card: { width: 768 },
+      hero: { width: 1920 },
+    },
+  },
+};

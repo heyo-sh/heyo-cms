@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "deploy": "react-router build && wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.62.5",
+    "wrangler": "4.147.0"
+  }
+}

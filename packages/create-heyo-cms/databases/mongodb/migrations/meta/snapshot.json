@@ -1,0 +1,2000 @@
+{
+  "version": 1,
+  "tables": [
+    {
+      "name": "activity",
+      "columns": [
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "actor_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "actor_source",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "changes",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "collection",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "document_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "ip",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "locale",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "source",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_activity_actor_id",
+          "table": "activity",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "actor_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_activity_collection_document_id",
+          "table": "activity",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "collection"
+            },
+            {
+              "kind": "column",
+              "column": "document_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_activity_created_at",
+          "table": "activity",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "created_at"
+            }
+          ],
+          "unique": false
+        }
+      ]
+    },
+    {
+      "name": "cms_accounts",
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "provider_account_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "references": {
+            "table": "cms_users",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_cms_accounts_user_id",
+          "table": "cms_accounts",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "user_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_cms_accounts_provider_account",
+          "table": "cms_accounts",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "provider"
+            },
+            {
+              "kind": "column",
+              "column": "provider_account_id"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_ai_credentials",
+      "columns": [
+        {
+          "name": "auth_type",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "api-key"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "hint",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "secret",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "uniq_cms_ai_credentials_provider",
+          "table": "cms_ai_credentials",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "provider"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_ai_mutations",
+      "columns": [
+        {
+          "name": "collection",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "document_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "result",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_cms_ai_mutations_run_id",
+          "table": "cms_ai_mutations",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "run_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_cms_ai_mutations_idempotency_key",
+          "table": "cms_ai_mutations",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "idempotency_key"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_ai_plans",
+      "columns": [
+        {
+          "name": "actor_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "approved_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "operations",
+          "type": "json",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "result",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "run_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "pending"
+        },
+        {
+          "name": "summary",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_cms_ai_plans_run_id",
+          "table": "cms_ai_plans",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "run_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_cms_ai_plans_status_expires_at",
+          "table": "cms_ai_plans",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "status"
+            },
+            {
+              "kind": "column",
+              "column": "expires_at"
+            }
+          ],
+          "unique": false
+        }
+      ]
+    },
+    {
+      "name": "cms_api_keys",
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "key_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "last_used_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "prefix",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "scopes",
+          "type": "json",
+          "nullable": false,
+          "storage": "column",
+          "array": true
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column",
+          "references": {
+            "table": "cms_users",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_cms_api_keys_user_id",
+          "table": "cms_api_keys",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "user_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_cms_api_keys_key_hash",
+          "table": "cms_api_keys",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "key_hash"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_roles",
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "permissions",
+          "type": "json",
+          "nullable": false,
+          "storage": "column",
+          "array": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "uniq_cms_roles_name",
+          "table": "cms_roles",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "name"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_sessions",
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "ip",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "user_agent",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "references": {
+            "table": "cms_users",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_cms_sessions_expires_at",
+          "table": "cms_sessions",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "expires_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_cms_sessions_user_id",
+          "table": "cms_sessions",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "user_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_cms_sessions_token_hash",
+          "table": "cms_sessions",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "token_hash"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_tokens",
+      "columns": [
+        {
+          "name": "consumed_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "data",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "user_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column",
+          "references": {
+            "table": "cms_users",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_cms_tokens_type_expires_at",
+          "table": "cms_tokens",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "type"
+            },
+            {
+              "kind": "column",
+              "column": "expires_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_cms_tokens_user_id",
+          "table": "cms_tokens",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "user_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_cms_tokens_token_hash",
+          "table": "cms_tokens",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "token_hash"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "cms_users",
+      "columns": [
+        {
+          "name": "avatar_url",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "last_login_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "locale",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "password_hash",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "roles",
+          "type": "json",
+          "nullable": false,
+          "storage": "column",
+          "array": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "active"
+        },
+        {
+          "name": "two_factor_enabled",
+          "type": "boolean",
+          "nullable": false,
+          "storage": "column",
+          "default": false
+        },
+        {
+          "name": "two_factor_secret",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "uniq_cms_users_email",
+          "table": "cms_users",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "email"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "documents",
+      "columns": [
+        {
+          "name": "collection",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "data",
+          "type": "json",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "purge_after",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "revision",
+          "type": "integer",
+          "nullable": false,
+          "storage": "column",
+          "default": 1
+        },
+        {
+          "name": "scheduled_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "scheduled_patch",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "updated_by",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_documents_collection",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "collection"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_documents_collection_deleted_at",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "collection"
+            },
+            {
+              "kind": "column",
+              "column": "deleted_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_documents_collection_updated_at",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "collection"
+            },
+            {
+              "kind": "column",
+              "column": "updated_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_documents_purge_after",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "purge_after"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_documents_scheduled_at",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "scheduled_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_documents_pages_handle",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "json",
+              "column": "data",
+              "path": [
+                "handle"
+              ],
+              "type": "text"
+            }
+          ],
+          "unique": true,
+          "where": {
+            "column": "collection",
+            "equals": "pages"
+          }
+        },
+        {
+          "name": "uniq_documents_posts_handle",
+          "table": "documents",
+          "targets": [
+            {
+              "kind": "json",
+              "column": "data",
+              "path": [
+                "handle"
+              ],
+              "type": "text"
+            }
+          ],
+          "unique": true,
+          "where": {
+            "column": "collection",
+            "equals": "posts"
+          }
+        }
+      ],
+      "documentColumn": "data"
+    },
+    {
+      "name": "jobs",
+      "columns": [
+        {
+          "name": "attempts",
+          "type": "integer",
+          "nullable": false,
+          "storage": "column",
+          "default": 0
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "locked_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "locked_by",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "run_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "pending"
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_jobs_status_run_at",
+          "table": "jobs",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "status"
+            },
+            {
+              "kind": "column",
+              "column": "run_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_jobs_type",
+          "table": "jobs",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "type"
+            }
+          ],
+          "unique": false
+        }
+      ]
+    },
+    {
+      "name": "media",
+      "columns": [
+        {
+          "name": "alt",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "checksum",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "created_by",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "filename",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "focal_x",
+          "type": "real",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "focal_y",
+          "type": "real",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "height",
+          "type": "integer",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "metadata",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "mime_type",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "orphaned_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "purge_after",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "purge_error",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "size",
+          "type": "bigint",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "active"
+        },
+        {
+          "name": "storage_key",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "width",
+          "type": "integer",
+          "nullable": true,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_media_status",
+          "table": "media",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "status"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_media_status_purge_after",
+          "table": "media",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "status"
+            },
+            {
+              "kind": "column",
+              "column": "purge_after"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_media_storage_key",
+          "table": "media",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "storage_key"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "media_usages",
+      "columns": [
+        {
+          "name": "collection",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "document_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "field",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "locale",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": ""
+        },
+        {
+          "name": "media_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "references": {
+            "table": "media",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_media_usages_document_id",
+          "table": "media_usages",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "document_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_media_usages_media_id",
+          "table": "media_usages",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "media_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_media_usages_reference",
+          "table": "media_usages",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "media_id"
+            },
+            {
+              "kind": "column",
+              "column": "document_id"
+            },
+            {
+              "kind": "column",
+              "column": "field"
+            },
+            {
+              "kind": "column",
+              "column": "locale"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "outbox",
+      "columns": [
+        {
+          "name": "actor",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "attempts",
+          "type": "integer",
+          "nullable": false,
+          "storage": "column",
+          "default": 0
+        },
+        {
+          "name": "available_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "collection",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "document_id",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "event_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "payload",
+          "type": "json",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "previous",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "pending"
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_outbox_document_id_created_at",
+          "table": "outbox",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "document_id"
+            },
+            {
+              "kind": "column",
+              "column": "created_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_outbox_status_available_at",
+          "table": "outbox",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "status"
+            },
+            {
+              "kind": "column",
+              "column": "available_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "uniq_outbox_event_id",
+          "table": "outbox",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "event_id"
+            }
+          ],
+          "unique": true
+        }
+      ]
+    },
+    {
+      "name": "webhook_deliveries",
+      "columns": [
+        {
+          "name": "attempt",
+          "type": "integer",
+          "nullable": false,
+          "storage": "column",
+          "default": 0
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "delivered_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "event_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "request_body",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "response_body",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "response_status",
+          "type": "integer",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "default": "pending"
+        },
+        {
+          "name": "webhook_id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "references": {
+            "table": "webhooks",
+            "column": "id",
+            "onDelete": "cascade"
+          }
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_webhook_deliveries_event_id",
+          "table": "webhook_deliveries",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "event_id"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_webhook_deliveries_status_next_attempt_at",
+          "table": "webhook_deliveries",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "status"
+            },
+            {
+              "kind": "column",
+              "column": "next_attempt_at"
+            }
+          ],
+          "unique": false
+        },
+        {
+          "name": "idx_webhook_deliveries_webhook_id_created_at",
+          "table": "webhook_deliveries",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "webhook_id"
+            },
+            {
+              "kind": "column",
+              "column": "created_at"
+            }
+          ],
+          "unique": false
+        }
+      ]
+    },
+    {
+      "name": "webhooks",
+      "columns": [
+        {
+          "name": "active",
+          "type": "boolean",
+          "nullable": false,
+          "storage": "column",
+          "default": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "events",
+          "type": "json",
+          "nullable": false,
+          "storage": "column",
+          "array": true
+        },
+        {
+          "name": "filters",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "headers",
+          "type": "json",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false,
+          "storage": "column",
+          "unique": true
+        },
+        {
+          "name": "secret",
+          "type": "text",
+          "nullable": true,
+          "storage": "column"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp",
+          "nullable": false,
+          "storage": "column"
+        },
+        {
+          "name": "url",
+          "type": "text",
+          "nullable": false,
+          "storage": "column"
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indexes": [
+        {
+          "name": "idx_webhooks_active",
+          "table": "webhooks",
+          "targets": [
+            {
+              "kind": "column",
+              "column": "active"
+            }
+          ],
+          "unique": false
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "name": "pages",
+      "slug": "pages",
+      "kind": "collection",
+      "table": "documents",
+      "documentColumn": "data",
+      "fields": [
+        {
+          "name": "body",
+          "type": "richText",
+          "localized": true,
+          "required": false,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "json",
+            "nullable": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "handle",
+          "type": "text",
+          "localized": false,
+          "required": false,
+          "unique": true,
+          "index": true,
+          "column": {
+            "type": "text",
+            "nullable": true,
+            "unique": true,
+            "index": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "localized": true,
+          "required": true,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "text",
+            "nullable": false,
+            "storage": "document"
+          }
+        }
+      ]
+    },
+    {
+      "name": "posts",
+      "slug": "posts",
+      "kind": "collection",
+      "table": "documents",
+      "documentColumn": "data",
+      "fields": [
+        {
+          "name": "body",
+          "type": "richText",
+          "localized": true,
+          "required": false,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "json",
+            "nullable": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "cover",
+          "type": "media",
+          "localized": false,
+          "required": false,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "text",
+            "nullable": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "excerpt",
+          "type": "textarea",
+          "localized": true,
+          "required": false,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "text",
+            "nullable": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "handle",
+          "type": "text",
+          "localized": false,
+          "required": false,
+          "unique": true,
+          "index": true,
+          "column": {
+            "type": "text",
+            "nullable": true,
+            "unique": true,
+            "index": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "localized": false,
+          "required": false,
+          "unique": false,
+          "index": false,
+          "default": "draft",
+          "column": {
+            "type": "text",
+            "default": "draft",
+            "nullable": true,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "localized": true,
+          "required": true,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "text",
+            "nullable": false,
+            "storage": "document"
+          }
+        }
+      ]
+    },
+    {
+      "name": "settings",
+      "slug": "settings",
+      "kind": "global",
+      "table": "documents",
+      "documentColumn": "data",
+      "fields": [
+        {
+          "name": "siteName",
+          "type": "text",
+          "localized": false,
+          "required": true,
+          "unique": false,
+          "index": false,
+          "default": "template-mongodb",
+          "column": {
+            "type": "text",
+            "default": "template-mongodb",
+            "nullable": false,
+            "storage": "document"
+          }
+        },
+        {
+          "name": "tagline",
+          "type": "textarea",
+          "localized": true,
+          "required": false,
+          "unique": false,
+          "index": false,
+          "column": {
+            "type": "text",
+            "nullable": true,
+            "storage": "document"
+          }
+        }
+      ]
+    }
+  ]
+}

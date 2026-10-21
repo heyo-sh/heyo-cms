@@ -1,0 +1,2 @@
+import { r2, type R2Binding } from "@heyo-sh/heyo-cms/uploads";
+import type { StorageConfig } from "@heyo-sh/heyo-cms/types";
