@@ -1,4 +1,5 @@
 import { CmsError } from "../errors";
+import { trimTrailingSlashes } from "../strings";
 import type {
   ObjectMeta,
   StorageAdapter,
@@ -33,7 +34,7 @@ export interface MemoryStorageOptions {
  */
 export function memory(options: MemoryStorageOptions = {}): StorageAdapter {
   const objects = new Map<string, MemoryObject>();
-  const baseUrl = (options.baseUrl ?? "memory://media").replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(options.baseUrl ?? "memory://media");
 
   return {
     id: "memory",
@@ -84,7 +85,7 @@ export interface LocalStorageOptions {
  * into a runtime that has none.
  */
 export function local(options: LocalStorageOptions): StorageAdapter {
-  const baseUrl = (options.baseUrl ?? "/media").replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(options.baseUrl ?? "/media");
 
   const resolvePath = async (key: string): Promise<string> => {
     const { join, normalize, resolve } = await import("node:path");

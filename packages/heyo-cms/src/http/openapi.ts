@@ -59,7 +59,10 @@ export function buildOpenApi(
 ): JsonObject {
   const config = cms._config;
 
-  const paths: JsonObject = {};
+  // A null prototype: the keys are route paths, and although every one
+  // starts with "/", an object that cannot be prototype-polluted costs
+  // nothing (CodeQL js/prototype-polluting-assignment).
+  const paths: JsonObject = Object.create(null) as JsonObject;
   for (const route of routes) {
     const path = openApiPath(route.path);
     const entry = (paths[path] as JsonObject | undefined) ?? {};

@@ -23,6 +23,15 @@ export function LinkPopover({
   const [href, setHref] = useState("");
   const active = editor.isActive("link");
 
+  // A stored link mark can carry any string. The editor keeps the value as
+  // typed, but the Open button only follows protocols a link is allowed to
+  // have — a `javascript:` URL stored in a document must not run because
+  // somebody clicked Open in the panel.
+  const trimmedHref = href.trim();
+  const openableHref = /^(https?:\/\/|mailto:|tel:|\/|#)/i.test(trimmedHref)
+    ? trimmedHref
+    : "#";
+
   useEffect(() => {
     if (!open) return;
     const current = editor.getAttributes("link").href as string | undefined;
@@ -86,7 +95,7 @@ export function LinkPopover({
               nativeButton={false}
               render={
                 <a
-                  href={href || "#"}
+                  href={openableHref}
                   target="_blank"
                   rel="noreferrer noopener"
                 />

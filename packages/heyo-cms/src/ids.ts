@@ -10,21 +10,38 @@
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 /**
+ * Uniform random base-36 characters.
+ *
+ * A plain `byte % 36` prefers the first 4 characters of the alphabet,
+ * because 256 is not a multiple of 36. Rejection sampling discards the
+ * 4 byte values past the last full multiple (252), so every character is
+ * equally likely and the ids stay unpredictable end to end.
+ */
+function randomSuffix(length: number): string {
+  const limit = 252; // the largest multiple of 36 that fits in a byte
+  let suffix = "";
+  while (suffix.length < length) {
+    const bytes = crypto.getRandomValues(new Uint8Array(length * 2));
+    for (const byte of bytes) {
+      if (byte >= limit) continue;
+      suffix += alphabet[byte % alphabet.length];
+      if (suffix.length === length) break;
+    }
+  }
+  return suffix;
+}
+
+/**
  * A sortable, prefixed id: `doc_01jq8z4m2k7xqf3h`.
  *
  * Time-ordered like a ULID, because an id that sorts by creation turns
  * "newest first" into an index scan instead of a sort, and makes a log of
- * ids readable. Randomness is 60 bits, which is far more than a single
- * millisecond of inserts needs.
+ * ids readable. Randomness is eight base-36 characters — about 41 bits —
+ * which is far more than a single millisecond of inserts needs.
  */
 export function createId(prefix: string): string {
   const time = Date.now().toString(36).padStart(9, "0");
-  const random = crypto.getRandomValues(new Uint8Array(8));
-  let suffix = "";
-  for (const byte of random) {
-    suffix += alphabet[byte % alphabet.length];
-  }
-  return `${prefix}_${time}${suffix}`;
+  return `${prefix}_${time}${randomSuffix(8)}`;
 }
 
 /**
@@ -42,10 +59,7 @@ export function createOrderedId(prefix: string): string {
   sequence = (sequence + 1) % 60_466_175; // 36^5 - 1
   const time = Date.now().toString(36).padStart(9, "0");
   const counter = sequence.toString(36).padStart(5, "0");
-  const random = crypto.getRandomValues(new Uint8Array(3));
-  let suffix = "";
-  for (const byte of random) suffix += alphabet[byte % alphabet.length];
-  return `${prefix}_${time}${counter}${suffix}`;
+  return `${prefix}_${time}${counter}${randomSuffix(3)}`;
 }
 
 /**

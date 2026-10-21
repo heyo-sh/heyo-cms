@@ -32,10 +32,28 @@ function readMount(): PanelMount {
   };
   if (!element?.textContent) return fallback;
   try {
-    return { ...fallback, ...(JSON.parse(element.textContent) as PanelMount) };
+    const parsed = JSON.parse(element.textContent) as Partial<PanelMount>;
+    return {
+      basePath: safePath(parsed.basePath, fallback.basePath),
+      panelPath: safePath(parsed.panelPath, fallback.panelPath),
+      title: typeof parsed.title === "string" ? parsed.title : fallback.title,
+    };
   } catch {
     return fallback;
   }
+}
+
+/**
+ * The mount JSON is written by the server from the configuration, but the
+ * panel still refuses anything that is not a plain absolute path: a value
+ * that could carry a scheme (`javascript:`), an authority (`//evil`) or a
+ * backslash never reaches `location.href` or an `href` attribute.
+ */
+function safePath(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  if (!value.startsWith("/")) return fallback;
+  if (value.startsWith("//") || value.includes("\\")) return fallback;
+  return value;
 }
 
 /**

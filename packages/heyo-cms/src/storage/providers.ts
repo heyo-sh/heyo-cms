@@ -1,5 +1,6 @@
 import { parseDuration } from "../duration";
 import { CmsConfigError, CmsError } from "../errors";
+import { trimTrailingSlashes } from "../strings";
 import type {
   StorageAdapter,
   StorageAdapterFactory,
@@ -183,7 +184,7 @@ export function azure(options: AzureStorageOptions): StorageAdapterFactory {
       "AZURE_STORAGE_KEY",
     );
     const base = `https://${options.account}.blob.core.windows.net/${options.container}`;
-    const publicBase = (options.publicUrl ?? base).replace(/\/+$/, "");
+    const publicBase = trimTrailingSlashes(options.publicUrl ?? base);
 
     return httpStorage({
       id: "azure",
@@ -241,10 +242,10 @@ function awsStorage(
   const pathStyle =
     options.forcePathStyle === true || Boolean(options.endpoint);
   const host = options.endpoint
-    ? options.endpoint.replace(/\/+$/, "")
+    ? trimTrailingSlashes(options.endpoint)
     : `https://s3.${region}.amazonaws.com`;
   const base = pathStyle ? `${host}/${options.bucket}` : hostWithBucket(host, options.bucket); // prettier-ignore
-  const publicBase = (options.publicUrl ?? base).replace(/\/+$/, "");
+  const publicBase = trimTrailingSlashes(options.publicUrl ?? base);
 
   const expiresIn = () =>
     Math.floor(

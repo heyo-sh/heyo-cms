@@ -1,5 +1,6 @@
 import { defaultBasePath } from "../defaults";
 import { CmsError } from "../errors";
+import { trimTrailingSlashes } from "../strings";
 import type { JsonObject } from "../types/json";
 import type { CmsPlugin } from "../types/plugin";
 import type { OrderBy, Where } from "../types/query";
@@ -77,7 +78,7 @@ export function heyoCmsClient<
   // This is deliberately relative: the no-options client is the same-origin
   // browser case. `requestUrl()` resolves it only when a request is made, so
   // importing the client from a server module stays safe.
-  const baseUrl = (options.baseUrl ?? defaultBasePath).replace(/\/+$/, "");
+  const baseUrl = trimTrailingSlashes(options.baseUrl ?? defaultBasePath);
   const fetchImpl = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args)); // prettier-ignore
 
   const request: ClientRequest = async (path, init = {}) => {

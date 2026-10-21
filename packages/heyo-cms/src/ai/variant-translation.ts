@@ -28,7 +28,11 @@ export async function translateVariantRichText(
       );
     // ProseMirror sometimes stores leading/trailing whitespace in its own
     // text nodes. Do not let trimming in a model collapse adjacent words.
-    return `${value.match(/^\s*/)?.[0] ?? ""}${text}${value.match(/\s*$/)?.[0] ?? ""}`;
+    // Measured with trimStart/trimEnd rather than /\s*$/, which backtracks
+    // quadratically on whitespace-heavy values.
+    const leading = value.slice(0, value.length - value.trimStart().length);
+    const trailing = value.slice(value.trimEnd().length);
+    return `${leading}${text}${trailing}`;
   };
 
   const walk = async (node: JsonValue): Promise<JsonValue> => {

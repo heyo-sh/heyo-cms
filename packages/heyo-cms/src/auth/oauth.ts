@@ -1,4 +1,5 @@
 import { CmsError } from "../errors";
+import { trimTrailingSlashes } from "../strings";
 import type { JsonObject } from "../types/json";
 import { sha256Base64Url } from "./crypto";
 
@@ -185,7 +186,7 @@ export function discoverOidc(
   issuer: string,
   fetchImpl: FetchLike,
 ): Promise<OAuthEndpoints> {
-  const url = `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
+  const url = `${trimTrailingSlashes(issuer)}/.well-known/openid-configuration`;
   const existing = discovered.get(url);
   if (existing) return existing;
 

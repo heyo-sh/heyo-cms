@@ -9,6 +9,7 @@ import { getAiAction, registeredAiActions } from "./ai/registry";
 import { describeEditorSchema } from "./editor/index";
 import { createAuth } from "./auth/service";
 import { CmsConfigError } from "./errors";
+import { trimTrailingSlashes } from "./strings";
 import { parseByteSize, parseDuration } from "./duration";
 import { createActivity } from "./engine/activity";
 import { CmsEngine } from "./engine/engine";
@@ -1187,7 +1188,7 @@ function normaliseAdminPath(value: string): string {
       "cannot contain a query, a fragment or an empty segment",
     );
   }
-  const normalised = trimmed.replace(/\/+$/, "");
+  const normalised = trimTrailingSlashes(trimmed);
   if (normalised.length === 0) {
     // The panel at the mount root is legal: `/admin/*` becomes `/*`, which is
     // matched last, so every API route still wins.
@@ -1211,7 +1212,7 @@ function normaliseBasePath(value: string): string {
   if (trimmed.includes("//")) {
     throw new CmsConfigError("basePath", "cannot contain empty segments");
   }
-  const normalised = trimmed.replace(/\/+$/, "");
+  const normalised = trimTrailingSlashes(trimmed);
   if (normalised.length === 0) {
     throw new CmsConfigError("basePath", 'cannot be "/"');
   }
