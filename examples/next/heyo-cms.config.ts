@@ -1,14 +1,24 @@
-import { defineCollection, heyoCms } from "@heyo-sh/heyo-cms";
+import {
+  defineCollection,
+  defineGlobal,
+  heyoCms,
+  permits,
+} from "@heyo-sh/heyo-cms";
+import { adminAssets } from "@heyo-sh/heyo-cms-admin";
 import { cmsUsers, oidc } from "@heyo-sh/heyo-cms/auth";
 import {
+  boolean,
   media,
   relation,
   richText,
   select,
   text,
+  textarea,
 } from "@heyo-sh/heyo-cms/fields";
 import { postgres } from "@heyo-sh/heyo-cms/postgres";
-import { s3 } from "@heyo-sh/heyo-cms/uploads";
+import { local, s3, sharpImages } from "@heyo-sh/heyo-cms/uploads";
+
+import { reviews } from "./plugin";
 
 /**
  * The target developer experience, written out in full.
@@ -18,8 +28,9 @@ import { s3 } from "@heyo-sh/heyo-cms/uploads";
  * rather than the documentation review. Nothing here is aspirational syntax:
  * every call below exists today.
  *
- * What is not wired up yet is marked inline — the media transport lands with
- * stage 6 and the HTTP handler with stage 7.
+ * `api-route.ts` next to it is the other half: the one file that mounts all of
+ * it over HTTP. `bun run example up next` serves exactly this configuration,
+ * seeded, on http://localhost:4320.
  */
 
 /**
@@ -32,11 +43,23 @@ const env = {
   OIDC_ISSUER: process.env.OIDC_ISSUER ?? "https://accounts.google.com",
   BUCKET: process.env.BUCKET ?? "heyo-cms-example",
   REGION: process.env.REGION ?? "eu-central-1",
+  GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID ?? "local-client-id",
+  GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET ?? "local-client-secret", // prettier-ignore
   OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "sk-local",
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "sk-local",
   GOOGLE_API_KEY: process.env.GOOGLE_API_KEY ?? "sk-local",
   WEBHOOK_SECRET: process.env.WEBHOOK_SECRET ?? "local-webhook-secret",
+  AI_KEY_SECRET: process.env.AI_KEY_SECRET ?? "local-ai-key-secret-01",
 };
+
+/**
+ * A directory instead of a bucket, when one is given.
+ *
+ * `StorageAdapter` is the same five methods either way, so development and
+ * `bun run example smoke` exercise the identical upload pipeline, variant
+ * rendering and collection that production does — without an AWS account.
+ */
+const mediaDirectory = process.env.MEDIA_DIR;
 
 export const cms = heyoCms({
   database: postgres(env.DATABASE_URL),
@@ -44,8 +67,22 @@ export const cms = heyoCms({
   // ---- EDITOR AUTHENTICATION -------------------------------------------
   admin: {
     path: "/admin",
+    title: "Acme",
+    // The panel, served from this same handler under `/admin`. One bundle,
+    // no second deployment, no CORS: it learns the collections, the fields
+    // and the languages from `GET /panel` at runtime.
+    assets: adminAssets(),
     auth: cmsUsers({
       methods: ["password", "magic-link", "github", "google"],
+      // Optional, and resolved at sign-in rather than at build time: this
+      // file has to load on a laptop where the OAuth app does not exist yet,
+      // and `GITHUB_CLIENT_ID` works just as well as writing it here.
+      providers: {
+        github: {
+          clientId: env.GITHUB_CLIENT_ID,
+          clientSecret: env.GITHUB_CLIENT_SECRET,
+        },
+      },
       sso: oidc({
         issuer: env.OIDC_ISSUER,
         mapRoles: (claims) => (claims.groups as string[]) ?? [],
@@ -60,7 +97,11 @@ export const cms = heyoCms({
   rbac: {
     roles: {
       admin: ["*"],
-      editor: ["posts:*", "media:*", "pages:read", "pages:update"],
+      // `reviews:*` is the plugin's collection: installing a plugin means
+      // granting the permissions its collection needs, exactly as for one
+      // the application declared itself.
+      editor: ["posts:*", "reviews:*", "media:*", "pages:read", "pages:update"], // prettier-ignore
+      // No `posts:publish`, so a writer drafts and somebody else publishes.
       writer: ["posts:read", "posts:create", "posts:update"],
       viewer: ["*:read"],
     },
@@ -68,17 +109,19 @@ export const cms = heyoCms({
   },
 
   // ---- I18N ------------------------------------------------------------
+  // Codes, and nothing else: "English" and "French" follow from them, and so
+  // does which of the two is written right to left. A field with no French
+  // value is answered in English and says so through `_fallback`.
   i18n: {
-    locales: "dynamic",
     defaultLocale: "en",
-    fallback: { mode: "default-locale", markAsFallback: true },
+    locales: ["en", "fr"],
   },
 
   // ---- MEDIA -----------------------------------------------------------
   uploads: {
-    // The S3 transport arrives with the media pipeline in stage 6; the
-    // options are validated today.
-    storage: s3({ bucket: env.BUCKET, region: env.REGION }),
+    storage: mediaDirectory
+      ? local({ directory: mediaDirectory, baseUrl: "/media" })
+      : s3({ bucket: env.BUCKET, region: env.REGION }),
 
     limits: {
       maxFileSize: "25mb",
@@ -87,8 +130,15 @@ export const cms = heyoCms({
     },
 
     images: {
+      // What renders pixels. Needed here because `convert` and
+      // `maxDimensions` promise bytes that do not exist yet; a deployment
+      // that resizes at the edge drops this and keeps `on-demand` variants,
+      // whose URLs then carry the size for the CDN.
+      processor: sharpImages(),
       convert: { to: "webp", keep: ["image/gif", "image/svg+xml"] },
       quality: 82,
+      // Performed by the engine itself, with or without a processor: a phone
+      // photograph carries the coordinates of where it was taken.
       stripMetadata: true,
       maxDimensions: { width: 3840, height: 3840 },
       focalPoint: true,
@@ -103,6 +153,9 @@ export const cms = heyoCms({
       },
     },
 
+    // Losing the last reference marks a file unused; it keeps serving for
+    // thirty days, and using it again reclaims it. `media-gc` is the only
+    // thing in the product that deletes a file.
     retention: {
       orphanAfterUnreferenced: true,
       purgeAfter: "30d",
@@ -111,8 +164,10 @@ export const cms = heyoCms({
   },
 
   // ---- AI --------------------------------------------------------------
-  // Credentials, the default model and chat. No task list: what AI can do
-  // lives on the field that can do it.
+  // Credentials, the default model and the panel-wide assistant. There is no
+  // task list: what AI can do on a *field* lives on the field that can do it,
+  // and what the assistant can reach is decided at runtime from this
+  // configuration and the signed-in actor.
   ai: {
     auth: {
       openai: { type: "api-key", token: env.OPENAI_API_KEY },
@@ -120,10 +175,20 @@ export const cms = heyoCms({
       google: { type: "api-key", token: env.GOOGLE_API_KEY },
     },
     defaultModel: { provider: "openai", model: "gpt-4o-mini" },
-    chat: {
+    assistant: {
       enabled: true,
-      model: { provider: "anthropic", model: "claude-sonnet-4" },
+      model: { provider: "anthropic", model: "claude-sonnet-4-5" },
+      instructions: "You edit a technical blog. Be concrete.",
+      // Budgets the server enforces. The prompt is not where limits live:
+      // a limit a model can talk itself out of is not a limit.
+      maxTurns: 8,
+      maxToolCalls: 16,
     },
+    // Lets an administrator type a provider key into the settings screen.
+    // It is encrypted with this secret before it is stored and is never
+    // answered with — the panel only ever sees the last four characters.
+    // A key stored this way wins over the ones above.
+    storage: { secret: env.AI_KEY_SECRET },
   },
 
   // ---- WEBHOOKS --------------------------------------------------------
@@ -140,47 +205,76 @@ export const cms = heyoCms({
   },
 
   // ---- TRASH -----------------------------------------------------------
+  // A delete sets `deleted_at` and a deadline; `cms.jobs.run()` removes what
+  // is past it. `purgeAfter: false` would keep deleted documents forever.
   trash: { enabled: true, purgeAfter: "30d" },
+
+  // ---- GLOBALS ---------------------------------------------------------
+  // Singletons: one row, no `find`, no `create`, same hooks and events.
+  globals: {
+    settings: defineGlobal({
+      label: "Site settings",
+      fields: {
+        siteName: text({ required: true, default: "Acme" }),
+        tagline: textarea({ localized: true }),
+        maintenance: boolean({
+          default: false,
+          // Who may take the site down is who may write this field, exactly
+          // as with `status` on a post.
+          access: { update: ({ actor }) => permits(actor, "settings:update") },
+        }),
+      },
+    }),
+  },
 
   // ---- COLLECTIONS -----------------------------------------------------
   collections: {
     posts: defineCollection({
       fields: {
-        // An ordinary select. The engine attaches no meaning to it.
+        // An ordinary select. The engine attaches no meaning to it — and this
+        // is the whole of "who may publish": whoever may write this field.
         status: select({
           options: ["draft", "review", "published"],
           default: "draft",
+          access: { update: ({ actor }) => permits(actor, "posts:publish") },
         }),
 
         title: text({
           localized: true,
           required: true,
-          // One key, one button in the AI menu next to this field.
-          ai: {
-            generate: {
-              label: "Suggest a title",
-              prompt: "Write a short, concrete title for this article.",
-              context: ["body"],
-            },
-            improve: {
-              label: "Improve",
-              prompt: "Keep the meaning, cut the length, drop the clickbait.",
-            },
-            translate: true,
+          aiGenerate: {
+            label: "Suggest a title",
+            prompt: "Write a short, concrete title for this article.",
+            context: ["body"],
+          },
+          ai: { translate: true },
+        }),
+
+        handle: text({
+          unique: true,
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          generate: ({ fields }) =>
+            String(fields.title ?? "")
+              .toLowerCase()
+              .trim()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, ""),
+          aiGenerate: {
+            label: "Suggest handle",
+            prompt:
+              "Suggest a lowercase, hyphenated URL handle from the title.",
+            context: ["title"],
           },
         }),
 
         body: richText({
           localized: true,
-          ai: {
-            generate: {
-              prompt: "Write the article from the title and the notes.",
-              context: ["title", "excerpt"],
-              model: { provider: "anthropic", model: "claude-sonnet-4" },
-            },
-            improve: true,
-            translate: true,
+          aiGenerate: {
+            prompt: "Write the article from the title and the notes.",
+            context: ["title", "excerpt"],
+            model: { provider: "anthropic", model: "claude-sonnet-4-5" },
           },
+          ai: { translate: true },
         }),
 
         excerpt: text({
@@ -198,25 +292,21 @@ export const cms = heyoCms({
         author: relation("cms_users"),
       },
 
-      // Chat over the whole document. `context` is required.
-      ai: {
-        chat: {
-          context: ["title", "body", "excerpt"],
-          instructions: "You edit a technical blog. Be concrete.",
-        },
-      },
-
-      // v1: CRUD only. Who may publish is who may write `status`.
+      // v1: CRUD only. Who may publish is who may write `status`, above.
       access: {
         read: () => true,
-        create: ({ actor }) => actor?.permissions.includes("posts:create") ?? false, // prettier-ignore
+        create: ({ actor }) => permits(actor, "posts:create"),
         update: ({ actor, record }) =>
-          (actor?.permissions.includes("posts:update") ?? false) ||
-          record?.authorId === actor?.id,
+          permits(actor, "posts:update") ||
+          (actor !== null && record?.authorId === actor.id),
         delete: ({ actor }) => actor?.roles.includes("admin") ?? false,
       },
     }),
   },
 
-  plugins: [],
+  // ---- PLUGINS ---------------------------------------------------------
+  // `./plugin.ts` is a third-party plugin written against the published
+  // entry points: a collection, a field type, an editor node, an AI action,
+  // a route, a migration and a patch to `posts`. Installing it is this line.
+  plugins: [reviews],
 });
