@@ -1,0 +1,610 @@
+/*
+ * The panel's stylesheet, which is one import and a contenteditable.
+ *
+ * `@heyo-sh/heyo-ui` brings Tailwind, the heyo tokens and the compiled
+ * components registered as a Tailwind source. There is no second palette
+ * here and no `tailwind.config.js`: every colour in this panel is a heyo
+ * token (`bg-heyo-base`, `text-heyo-subtle`, `ring-heyo-line`), so a
+ * deployment that wants a different panel overrides tokens rather than
+ * hunting for classes in forty files.
+ *
+ * Colour mode is `data-mode` on <html>, set by `lib/panel`. Nothing below
+ * carries a `dark:` variant, because every token resolves both modes through
+ * `light-dark()`.
+ */
+
+@import "@heyo-sh/heyo-ui";
+
+@source "./";
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-heyo-canvas);
+    color: var(--text-color-heyo-default);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/*
+ * The dashboard banner.
+ *
+ * It used to be a 13rem photograph fetched from heyo.sh: a third of the
+ * first screen spent on a picture, and a panel that cannot draw its own home
+ * page until a request to another origin comes back. This is the same strip
+ * at half the height, drawn by the browser.
+ *
+ * Monochrome, because the whole system is. Every layer is drawn in one ink —
+ * the inverse of the page, at four alphas — so the piece reads as graphite on
+ * paper in light mode and as light through smoke in the dark, and nothing has
+ * to be re-picked when the mode flips. `light-dark()` rather than
+ * `color-mix()` on a single ink: the two are equivalent here, and the former
+ * is what the rest of the system is written in.
+ *
+ * Every animation moves `transform` or `opacity` and nothing else, so the
+ * compositor runs all of it off the main thread: no layout, no paint, no
+ * jank while the dashboard is fetching its activity feed. Smoothness is a
+ * matter of where the loops turn around, too —
+ *
+ *   - the ruling pans by exactly one cell, so its loop point is invisible;
+ *   - the washes run `alternate` on a sine-shaped curve, so they arrive at
+ *     each end with zero velocity and turn without a corner;
+ *   - the beams and the sweep are transparent at 0% and 100%, so the jump
+ *     back to the start happens where there is nothing on screen to jump.
+ *
+ * None of the durations divide into each other, so the layers drift in and
+ * out of phase instead of beating together: the composition never repeats
+ * inside a visit.
+ */
+@layer components {
+  .heyo-banner {
+    --banner-rule: light-dark(oklch(0% 0 0 / 0.07), oklch(100% 0 0 / 0.07));
+    --banner-wash: light-dark(oklch(0% 0 0 / 0.1), oklch(100% 0 0 / 0.12));
+    --banner-wash-soft: light-dark(
+      oklch(0% 0 0 / 0.04),
+      oklch(100% 0 0 / 0.05)
+    );
+    --banner-beam: light-dark(oklch(0% 0 0 / 0.38), oklch(100% 0 0 / 0.34));
+    --banner-sheen: light-dark(oklch(0% 0 0 / 0.05), oklch(100% 0 0 / 0.06));
+    /* Half the strip's own rhythm: at 14px the ruling reads as a weave
+       rather than as a table, which is what a 6.5rem band of it should. */
+    --banner-cell: 14px;
+    position: relative;
+    isolation: isolate;
+    /* A whisper of tone at the top so the strip reads as a surface rather
+       than as the page with lines on it. */
+    background:
+      linear-gradient(180deg, var(--banner-sheen), transparent 100%),
+      var(--color-heyo-canvas);
+    /*
+     * Not decoration: this is what makes the strip's bottom rule the same
+     * line as every other rule in the panel. A gradient's box is the padding
+     * box, and a repeating one tiles from there — so the row under it, which
+     * is exactly the `border-b`, was painting the *top* of the gradient
+     * again. The hairline then sat on tinted ground and came out a step
+     * darker than the identical hairline on the page bar two rows above it.
+     */
+    background-repeat: no-repeat;
+  }
+
+  .heyo-banner-art {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* The ruled field. Overscanned by two cells in every direction so the pan
+     never brings an edge into view. */
+  .heyo-banner-grid {
+    position: absolute;
+    inset: calc(var(--banner-cell) * -2);
+    background-image:
+      linear-gradient(to right, var(--banner-rule) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--banner-rule) 1px, transparent 1px);
+    background-size: var(--banner-cell) var(--banner-cell);
+    animation: heyo-banner-drift 36s linear infinite;
+    will-change: transform;
+  }
+
+  /* Three soft washes, moving slowly past each other. */
+  .heyo-banner-wash {
+    position: absolute;
+    top: 50%;
+    translate: -50% -50%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    /* Three stops rather than two: a linear ramp from ink to nothing has a
+       visible outer edge where its slope stops, which on a strip this short
+       reads as a smudge with a rim. The middle stop bends the falloff into
+       something closer to a Gaussian, and the blob loses its edge. */
+    background: radial-gradient(
+      circle at center,
+      var(--banner-wash) 0%,
+      var(--banner-wash-soft) 42%,
+      transparent 72%
+    );
+    will-change: transform;
+  }
+
+  /* One ink, three densities: the depth comes from the layer's own opacity
+     rather than from a third colour. */
+  .heyo-banner-wash-a {
+    left: 24%;
+    width: 62%;
+    opacity: 0.9;
+    animation: heyo-banner-wash-a 19s cubic-bezier(0.37, 0, 0.63, 1) infinite
+      alternate;
+  }
+
+  .heyo-banner-wash-b {
+    left: 62%;
+    width: 52%;
+    opacity: 0.75;
+    animation: heyo-banner-wash-b 27s cubic-bezier(0.37, 0, 0.63, 1) infinite
+      alternate;
+  }
+
+  .heyo-banner-wash-c {
+    left: 92%;
+    width: 44%;
+    opacity: 1;
+    animation: heyo-banner-wash-c 23s cubic-bezier(0.37, 0, 0.63, 1) infinite
+      alternate;
+  }
+
+  /* Signals crossing the strip: a hairline that accelerates in and glides
+     out, which is the one gesture in here with a direction. */
+  .heyo-banner-beam {
+    position: absolute;
+    left: 0;
+    height: 1px;
+    width: var(--beam-width);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--banner-beam) 50%,
+      transparent
+    );
+    opacity: 0;
+    animation: heyo-banner-beam var(--beam-time) cubic-bezier(0.5, 0, 0.2, 1)
+      var(--beam-delay) infinite;
+    will-change: transform, opacity;
+  }
+
+  .heyo-banner-beam-a {
+    top: 24%;
+    --beam-width: 34%;
+    --beam-time: 11s;
+    --beam-delay: 0s;
+  }
+
+  .heyo-banner-beam-b {
+    top: 58%;
+    --beam-width: 22%;
+    --beam-time: 17s;
+    --beam-delay: 3.5s;
+  }
+
+  .heyo-banner-beam-c {
+    top: 81%;
+    --beam-width: 42%;
+    --beam-time: 13s;
+    --beam-delay: 7.5s;
+  }
+
+  /* One wide, very faint sweep across everything else. */
+  .heyo-banner-sweep {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 40%,
+      var(--banner-sheen) 50%,
+      transparent 60%
+    );
+    opacity: 0;
+    animation: heyo-banner-sweep 21s linear infinite;
+    will-change: transform, opacity;
+  }
+
+  /*
+   * The veil, which is the reason the heading needs no plate behind it any
+   * more: the left third of the strip is the page colour, and the artwork
+   * resolves out of it.
+   *
+   * The bottom stop is the page colour exactly, not a step short of it. The
+   * strip is closed by `border-b border-heyo-hairline` — the same rule the
+   * page bar, the sidebar's search row and the fields pane are closed with —
+   * and that rule is translucent black. Left sitting on a washed, ruled
+   * background it composites darker than its twin two rows up, which is a
+   * seam that reads as a different weight of line in the one place the eye
+   * can compare them. Fading the artwork out before the edge puts the
+   * hairline on canvas, where every other hairline in the panel is.
+   */
+  .heyo-banner-veil {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(90deg, var(--color-heyo-canvas) 14%, transparent 46%),
+      linear-gradient(180deg, transparent 42%, var(--color-heyo-canvas) 100%);
+  }
+}
+
+@keyframes heyo-banner-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(var(--banner-cell), var(--banner-cell), 0);
+  }
+}
+
+@keyframes heyo-banner-wash-a {
+  from {
+    transform: translate3d(-13%, -7%, 0) scale(0.9);
+  }
+  to {
+    transform: translate3d(11%, 6%, 0) scale(1.1);
+  }
+}
+
+@keyframes heyo-banner-wash-b {
+  from {
+    transform: translate3d(9%, 8%, 0) scale(1.08);
+  }
+  to {
+    transform: translate3d(-12%, -5%, 0) scale(0.92);
+  }
+}
+
+@keyframes heyo-banner-wash-c {
+  from {
+    transform: translate3d(6%, 5%, 0) scale(0.95);
+  }
+  to {
+    transform: translate3d(-9%, -8%, 0) scale(1.12);
+  }
+}
+
+/* Percentages are of the beam's own width, and the widest beam is 42% of the
+   strip — 340% carries even that one clear of the right edge. */
+@keyframes heyo-banner-beam {
+  0% {
+    transform: translate3d(-110%, 0, 0);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(340%, 0, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes heyo-banner-sweep {
+  0% {
+    transform: translate3d(-55%, 0, 0);
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(55%, 0, 0);
+    opacity: 0;
+  }
+}
+
+/*
+ * Taken at its word: no motion, and the composition still has to stand. The
+ * beams and the sweep are transparent at rest, so they are given a resting
+ * opacity rather than left invisible.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .heyo-banner-grid,
+  .heyo-banner-wash,
+  .heyo-banner-beam,
+  .heyo-banner-sweep {
+    animation: none;
+  }
+
+  .heyo-banner-beam {
+    opacity: 0.55;
+    transform: translate3d(60%, 0, 0);
+  }
+
+  .heyo-banner-sweep {
+    opacity: 1;
+  }
+}
+
+/*
+ * The auth screen: the form on the left, a drawing on the right.
+ *
+ * The second column is a shade deeper than the page — `recessed`, the same
+ * token wells and code blocks use — and the seam between the two is the
+ * panel's own hairline, the rule every other split in the application is
+ * closed with (the media library's details pane, the page bars, the table
+ * rows).
+ *
+ * The drawing is a Hairline figure (`art/layout-figure.tsx`). Its palette is five
+ * variables the engine reads, and they are mapped here onto heyo tokens, so
+ * the figure follows the panel's colour mode and a deployment that overrides
+ * the tokens gets a figure that matches. `plate` has to be the colour behind
+ * the drawing: the solids are filled with it, which is what lets a near one
+ * cover a far one.
+ */
+@layer components {
+  .heyo-auth-layout {
+    display: grid;
+    min-height: 100vh;
+    min-height: 100dvh;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    background: var(--color-heyo-canvas);
+  }
+
+  .heyo-auth-form {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(1.5rem, 5vw, 4rem);
+  }
+
+  .heyo-auth-art {
+    display: grid;
+    min-width: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    place-items: center;
+    border-left: 1px solid var(--color-heyo-hairline);
+    padding: clamp(1.5rem, 4vw, 4rem);
+    background: var(--color-heyo-recessed);
+
+    --hairline-plate: var(--color-heyo-recessed);
+    --hairline-hi: var(--text-color-heyo-strong);
+    --hairline-edge: var(--text-color-heyo-inactive);
+    --hairline-mid: var(--color-heyo-interact);
+    --hairline-lo: var(--color-heyo-fill);
+  }
+
+  .heyo-auth-figure {
+    width: 100%;
+    max-width: 40rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .heyo-auth-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .heyo-auth-art {
+    display: none;
+  }
+}
+
+/*
+ * One line of bridging, with an expiry date on it.
+ *
+ * heyo-ui ≤ 0.4.1 draws `DataTable`'s toolbar strip whenever a `title` or a
+ * `description` is set, although both render their own block above it. Every
+ * table on Settings is captioned and none of them is searchable, so each one
+ * got a 3.25rem bar with a hairline under it and nothing inside.
+ *
+ * The fix is upstream (changeset `data-table-empty-toolbar`): the strip is
+ * brought into existence by the controls that live in it, not by the caption
+ * above it. This rule says the same thing from the outside — a strip holding
+ * no control at all is not a strip — and is to be deleted the moment the
+ * dependency moves to the release that carries it.
+ */
+@layer components {
+  /* The strip's trailing group is its only child when there is no search box
+     and no result count, and that group is empty when the table passes no
+     `toolbar` and no column toggle. Both at once is the empty strip, and
+     nothing else is: a selection bar has four children, a search has two. */
+  [data-slot="data-table-toolbar"]:has(> div:only-child:empty) {
+    display: none;
+  }
+}
+
+/*
+ * The editor's own styles.
+ *
+ * TipTap renders a contenteditable, not components, so typography here is
+ * CSS rather than classes on elements that do not exist yet. Scoped to
+ * `.heyo-prose` so it never leaks onto the rest of the panel, and written
+ * against heyo-ui's tokens so the prose and the chrome agree about what a
+ * hairline and a muted word look like.
+ */
+@layer components {
+  .heyo-prose {
+    font-size: 16px;
+    line-height: 1.7;
+    color: var(--text-color-heyo-default);
+  }
+
+  .heyo-prose:focus {
+    outline: none;
+  }
+
+  .heyo-prose > * + * {
+    margin-top: 0.75em;
+  }
+
+  .heyo-prose h1 {
+    font-size: 1.75em;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.015em;
+    color: var(--text-color-heyo-strong);
+  }
+
+  .heyo-prose h2 {
+    font-size: 1.35em;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    color: var(--text-color-heyo-strong);
+  }
+
+  .heyo-prose h3 {
+    font-size: 1.15em;
+    font-weight: 600;
+    color: var(--text-color-heyo-strong);
+  }
+
+  .heyo-prose h4 {
+    font-size: 1.02em;
+    font-weight: 600;
+    color: var(--text-color-heyo-strong);
+  }
+
+  .heyo-prose p.is-editor-empty:first-child::before,
+  .heyo-prose .is-empty.has-focus::before {
+    content: attr(data-placeholder);
+    color: var(--text-color-heyo-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+  }
+
+  .heyo-prose ul,
+  .heyo-prose ol {
+    padding-left: 1.4em;
+  }
+
+  .heyo-prose ul {
+    list-style: disc;
+  }
+
+  .heyo-prose ol {
+    list-style: decimal;
+  }
+
+  .heyo-prose ul[data-type="taskList"] {
+    list-style: none;
+    padding-left: 0.2em;
+  }
+
+  .heyo-prose ul[data-type="taskList"] li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5em;
+  }
+
+  .heyo-prose ul[data-type="taskList"] li > div {
+    flex: 1;
+  }
+
+  .heyo-prose ul[data-type="taskList"] input[type="checkbox"] {
+    margin-top: 0.45em;
+    accent-color: var(--color-heyo-brand);
+  }
+
+  .heyo-prose blockquote {
+    border-left: 2px solid var(--color-heyo-line);
+    padding-left: 1em;
+    color: var(--text-color-heyo-subtle);
+  }
+
+  .heyo-prose code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--color-heyo-recessed);
+    padding: 0.1em 0.3em;
+    border-radius: var(--radius-sm);
+  }
+
+  .heyo-prose pre {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--color-code-surface);
+    color: var(--code-plain);
+    padding: 0.8em 1em;
+    border-radius: var(--radius-lg);
+    overflow-x: auto;
+  }
+
+  .heyo-prose pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .heyo-prose a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    color: var(--text-color-heyo-link);
+  }
+
+  .heyo-prose img {
+    max-width: 100%;
+    border-radius: var(--radius-lg);
+  }
+
+  .heyo-prose hr {
+    border: none;
+    border-top: 1px solid var(--color-heyo-hairline);
+  }
+
+  .heyo-prose table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+    overflow: hidden;
+  }
+
+  .heyo-prose th,
+  .heyo-prose td {
+    border: 1px solid var(--color-heyo-hairline);
+    padding: 0.4em 0.6em;
+    vertical-align: top;
+    position: relative;
+  }
+
+  .heyo-prose th {
+    background: var(--color-heyo-elevated);
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .heyo-prose .selectedCell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--color-heyo-brand-tint);
+    pointer-events: none;
+  }
+
+  .heyo-prose .column-resize-handle {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--color-heyo-focus);
+    pointer-events: none;
+  }
+
+  .heyo-prose .ProseMirror-selectednode {
+    outline: 2px solid var(--color-heyo-focus);
+    outline-offset: 1px;
+    border-radius: var(--radius-sm);
+  }
+}

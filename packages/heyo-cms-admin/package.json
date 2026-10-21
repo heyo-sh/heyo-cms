@@ -1,14 +1,67 @@
 {
   "name": "@heyo-sh/heyo-cms-admin",
-  "version": "0.0.0",
-  "description": "The Heyo CMS admin panel, served from the CMS handler itself.",
-  "private": true,
+  "version": "0.1.0",
+  "description": "The Heyo CMS admin panel: one bundle, served from the CMS handler itself.",
+  "keywords": [
+    "cms",
+    "headless-cms",
+    "admin-panel",
+    "tiptap",
+    "heyo-ui"
+  ],
+  "homepage": "https://heyo.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heyo-sh/heyo-cms.git",
+    "directory": "packages/heyo-cms-admin"
+  },
+  "bugs": {
+    "url": "https://github.com/heyo-sh/heyo-cms/issues"
+  },
   "license": "MIT",
   "type": "module",
-  "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "peerDependencies": {
+    "@heyo-sh/heyo-cms": "^0.1.0"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "20.14.5",
+    "@heyo-sh/heyo-cms": "workspace:*",
+    "@heyo-sh/heyo-ui": "0.4.1",
+    "@tabler/icons-react": "3.48.0",
+    "@tiptap/core": "3.31.4",
+    "@tiptap/extension-emoji": "3.31.4",
+    "@tiptap/extension-image": "3.31.4",
+    "@tiptap/extension-table": "3.31.4",
+    "@tiptap/extension-task-item": "3.31.4",
+    "@tiptap/extension-task-list": "3.31.4",
+    "@tiptap/extensions": "3.31.4",
+    "@tiptap/pm": "3.31.4",
+    "@tiptap/react": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
+    "@tiptap/suggestion": "3.31.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "bun-plugin-tailwind": "0.1.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tailwindcss": "4.3.3"
+  },
+  "scripts": {
+    "build": "bun build.ts",
+    "typecheck": "tsc -p tsconfig.json"
   }
 }

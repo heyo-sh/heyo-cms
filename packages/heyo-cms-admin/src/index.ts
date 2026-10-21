@@ -1,13 +1,38 @@
-/**
- * The admin panel.
- *
- * Built in stage 8 (shadcn + TipTap v3) and served from `/admin/*` of the same
- * handler as the API, so a project never deploys it separately. The package
- * exists now because the plugin contract already refers to it: a plugin
- * declares `admin` extensions in stage 1 and they have to have somewhere to
- * land.
- *
- * Kept private until it does something.
- */
+import type { AdminAssets } from "@heyo-sh/heyo-cms/types";
 
-export const adminPanelStage = 8 as const;
+import { createAdminAssets, type AdminAssetsOptions } from "./assets";
+import { bundle } from "./bundle";
+
+/**
+ * `@heyo-sh/heyo-cms-admin`: the panel.
+ *
+ * ```ts
+ * import { adminAssets } from "@heyo-sh/heyo-cms-admin";
+ *
+ * heyoCms({
+ *   admin: { path: "/admin", assets: adminAssets() },
+ *   // …
+ * });
+ * ```
+ *
+ * One function, because there is one decision to make: whether the panel is
+ * installed. Everything else it needs — the collections, the fields, the
+ * languages, what the caller may press — it asks the API for at runtime
+ * through `GET /panel`, so the bundle is the same bytes in every deployment
+ * and a field added to a collection is visible on the next page load rather
+ * than after a rebuild.
+ *
+ * The package has no runtime dependencies. React, TipTap and the rest are
+ * compiled into the bundle, which is the only honest way to ship a panel that
+ * has to run inside a Worker.
+ */
+export function adminAssets(options: AdminAssetsOptions = {}): AdminAssets {
+  return createAdminAssets(bundle, options);
+}
+
+export { createAdminAssets } from "./assets";
+export type {
+  AdminAssetsOptions,
+  PanelBundle,
+  PanelBundleFile,
+} from "./assets";
