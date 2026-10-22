@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { defineCollection, heyoCms } from "../src/config";
 import { mongodb } from "../src/db/mongodb";
 import { sqlite } from "../src/db/sqlite";
-import { select, slug, text } from "../src/fields";
+import { select, text } from "../src/fields";
 import {
   generateMigration,
   MigrationStore,
@@ -86,7 +86,7 @@ describe("generate", () => {
       store,
       target: schemaOf({
         title: text({}),
-        handle: slug({}),
+        handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
         status: select({ options: ["draft", "published"], default: "draft" }),
       } as never),
     });
@@ -110,7 +110,10 @@ describe("generate", () => {
     const result = await generateMigration({
       adapter,
       store,
-      target: schemaOf({ title: text({}), handle: slug({}) } as never),
+      target: schemaOf({
+        title: text({}),
+        handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+      } as never),
     });
     expect(result.file?.endsWith(".json")).toBe(true);
 
@@ -155,7 +158,10 @@ describe("migrate", () => {
     await generateMigration({
       adapter,
       store,
-      target: schemaOf({ title: text({}), handle: slug({}) } as never),
+      target: schemaOf({
+        title: text({}),
+        handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+      } as never),
     });
 
     await runMigrations({ adapter, store });
@@ -207,7 +213,10 @@ describe("status", () => {
     const current = await migrationStatus({
       adapter,
       store,
-      target: schemaOf({ title: text({}), handle: slug({}) } as never),
+      target: schemaOf({
+        title: text({}),
+        handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
+      } as never),
     });
     expect(current.applied).toHaveLength(1);
     expect(current.pending).toHaveLength(0);

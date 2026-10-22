@@ -1,16 +1,20 @@
 {
   "name": "heyo-cms-monorepo",
   "private": true,
-  "packageManager": "bun@1.3.1",
+  "packageManager": "bun@1.4.3",
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/next",
+    "website"
   ],
   "scripts": {
-    "build": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/create-heyo-cms build",
+    "build": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/heyo-cms-admin build && bun run --filter @heyo-sh/create-heyo-cms build",
     "test": "bun test",
     "example": "bun scripts/examples.ts",
-    "typecheck": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/heyo-cms typecheck && bun run --filter @heyo-sh/heyo-cms-admin typecheck && bun run --filter @heyo-sh/create-heyo-cms typecheck && bun run --filter heyo-cms-next-example typecheck && tsc -p tsconfig.scripts.json",
+    "templates": "bun scripts/templates.ts",
+    "docs:dev": "bun run --cwd website dev",
+    "docs:build": "bun run --cwd website build",
+    "typecheck": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/heyo-cms typecheck && bun run --filter @heyo-sh/heyo-cms-admin build && bun run --filter @heyo-sh/heyo-cms-admin typecheck && bun run --filter @heyo-sh/create-heyo-cms typecheck && bun run --filter heyo-cms-next-example typecheck && tsc -p tsconfig.scripts.json",
     "format": "prettier --write .",
     "lint": "prettier --check .",
     "format-staged": "lint-staged",
@@ -19,7 +23,7 @@
     "quality:pre-push": "bun run lint && bun run knip && bun run typecheck && bun test",
     "quality": "bun run lint && bun run knip && bun run typecheck && bun test && bun run build",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && bun install --lockfile-only",
     "release": "changeset publish"
   },
   "devDependencies": {

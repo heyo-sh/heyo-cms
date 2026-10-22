@@ -1,0 +1,24 @@
+/**
+ * No processor, because this runtime has no codec.
+ *
+ * Workers cannot run `sharp`, and that is not a gap in the configuration: a
+ * named size with `variants.mode: "on-demand"` puts the size in the URL, and
+ * Cloudflare Images (or any CDN in front of the bucket) renders it. The CMS
+ * stores one original and serves it when nothing else answers.
+ *
+ * `stripMetadata` still applies — the engine removes EXIF itself, with or
+ * without a codec, so a phone photograph does not publish the coordinates of
+ * where it was taken.
+ */
+const images: ImagesConfig = {
+  stripMetadata: true,
+  focalPoint: true,
+  variants: {
+    mode: "on-demand",
+    sizes: {
+      thumb: { width: 320, height: 320, fit: "cover" },
+      card: { width: 768 },
+      hero: { width: 1920 },
+    },
+  },
+};

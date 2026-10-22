@@ -1,0 +1,87 @@
+---
+title: Hooks and events
+description: Two layers, one return contract, and why side effects go through the outbox.
+---
+
+# Hooks and events
+
+Two layers — data and HTTP — with explicit `before` and `after`, and one
+return contract for all of them:
+
+| Return                    | Meaning                                  |
+| ------------------------- | ---------------------------------------- |
+| `undefined`               | continue                                 |
+| `{ data }`                | continue with this replacement           |
+| `false`                   | stop, silently; the write returns `null` |
+| `throw new CmsError(...)` | stop with a status                       |
+
+```ts
+databaseHooks: {
+  posts: {
+    create: {
+      before: async ({ data }, ctx) => ({ data: { ...data, handle: slugify(data.title) } }),
+      after: async (doc, ctx) => ctx.events.emit("search.index", { id: doc.id }),
+    },
+    update: { before: async ({ data, previous }, ctx) => undefined },
+    delete: { after: async (doc, ctx) => undefined },
+  },
+}
+```
+
+Globals are in the same key set: a singleton nobody can hook is a singleton
+that cannot validate itself.
+
+## The context
+
+```ts
+ctx.cms; // the local API, access control enforced
+ctx.db; // the raw tables, access control bypassed — by name, not by flag
+ctx.events; // emit into the outbox, inside this transaction
+ctx.actor; // who is writing, or null
+ctx.operation; // "create" | "update" | "delete"
+ctx.locale; // the locale this write is in
+ctx.source; // "local" | "http" | "cli" | "job"
+```
+
+`before` runs inside the transaction ahead of the write; `after` runs inside
+it behind the write. There is no third moment: anything that must survive a
+rollback is an event, not a hook.
+
+**Validation runs after the `before` hooks.** That is what makes "generate the
+slug in a hook" work on a required field.
+
+## Events
+
+The engine writes its own events — `document.created`, `document.updated`,
+one `document.field.changed` per field that actually changed,
+`document.scheduled`, `document.schedule.applied`, `document.trashed`,
+`document.restored`, `document.purged`, the `media.*` family, `job.failed` —
+into the `outbox` table inside the transaction and delivers them after the
+commit.
+
+```ts
+cms.on("document.updated", async (event) => {
+  event.data.previous; // the whole document before
+  event.data.document; // and after
+});
+await cms.drainEvents(); // deliver now; a CLI or a freezing runtime wants this
+```
+
+A rolled-back write sends nothing. A committed one sends for certain, even if
+the process dies between the commit and the delivery — which is the entire
+reason for the table.
+
+## HTTP hooks
+
+```ts
+hooks: {
+  before: [{
+    matcher: (c) => c.method === "POST" && c.path.startsWith("/posts"),
+    handler: async (c) => (await overLimit(c.actor)) ? new Response(null, { status: 429 }) : undefined,
+  }],
+  after: [{ matcher: (c) => c.status === 200, handler: (c) => c.headers.set("x-cache", "miss") }],
+}
+```
+
+A `before` hook that returns a `Response` short-circuits the request, which is
+what makes rate limiting expressible without a middleware concept of its own.

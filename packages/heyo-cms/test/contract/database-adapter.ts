@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { heyoCms, defineCollection } from "../../src/config";
-import { media, number, select, slug, text } from "../../src/fields";
+import { date, media, number, select, text } from "../../src/fields";
 import { and, eq, gt, orderBy } from "../../src/query";
 import { planMigration } from "../../src/schema/plan";
 import { emptySnapshot } from "../../src/schema/snapshot";
@@ -33,19 +33,20 @@ export function contractSchema(): SchemaSnapshot {
       posts: defineCollection({
         fields: {
           title: text({ required: true }),
-          handle: slug({}),
+          handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
           status: select({
             options: ["draft", "review", "published"],
             default: "draft",
           }),
           views: number({ integer: true }),
+          publishedAt: date({}),
           cover: media({}),
         },
       }),
       pages: defineCollection({
         fields: {
           title: text({ required: true }),
-          handle: slug({}),
+          handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
         },
       }),
     },
@@ -103,6 +104,30 @@ export function runDatabaseAdapterContract(entry: AdapterUnderTest): void {
       const applied = await adapter.listAppliedMigrations();
       expect(applied.map((entry) => entry.id)).toEqual(["0000_contract"]);
       expect(applied[0]?.checksum).toBe("abc");
+      await adapter.close?.();
+    });
+
+    test("compares an ISO date in the document body to a timestamp", async () => {
+      const adapter = await prepare();
+      await adapter.transaction(async (tx) => {
+        await insertPost(adapter, tx, "doc_date_before", {
+          title: "Before",
+          publishedAt: "2025-01-01T00:00:00.000Z",
+        });
+        await insertPost(adapter, tx, "doc_date_after", {
+          title: "After",
+          publishedAt: "2025-02-01T00:00:00.000Z",
+        });
+
+        const after = await adapter.query(tx, {
+          table: "documents",
+          where: and(
+            eq("collection", "posts"),
+            gt("publishedAt", new Date("2025-01-15T00:00:00.000Z")),
+          ),
+        });
+        expect(after.map((row) => row.id)).toEqual(["doc_date_after"]);
+      });
       await adapter.close?.();
     });
 

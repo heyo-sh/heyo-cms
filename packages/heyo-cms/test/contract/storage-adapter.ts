@@ -12,10 +12,10 @@ export interface StorageUnderTest {
  * The contract every storage adapter has to satisfy.
  *
  * Four methods, so four groups of assertions: a file goes in, comes back out,
- * disappears on request, and has a URL. The media lifecycle in stage 6 depends
- * on exactly these behaviours — in particular on `get` answering `null` for a
- * missing key rather than throwing, because a purge that raced with a read
- * must not take a request down.
+ * disappears on request, and has a URL. The media lifecycle depends on exactly
+ * these behaviours — in particular on `get` answering `null` for a missing key
+ * rather than throwing, because a collection that raced with a read must not
+ * take a request down, and on `delete` tolerating a key that is already gone.
  */
 export function runStorageAdapterContract(entry: StorageUnderTest): void {
   describe(`storage adapter contract: ${entry.name}`, () => {

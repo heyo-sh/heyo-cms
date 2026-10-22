@@ -1,0 +1,54 @@
+---
+import { richTextToHtml } from "@heyo-sh/heyo-cms";
+
+import { cachePage, postTag } from "../../../heyo-cms.cache.ts";
+import { cms } from "../../../heyo-cms.config.ts";
+
+/**
+ * One post, cached under its own tag.
+ *
+ * Per handle rather than per collection: publishing a correction to one post
+ * must not throw away every other post page the CDN is holding.
+ * `heyo-cms.config.ts` purges `posts:<handle>` and `posts` together, so this
+ * page and the front page both empty on a save and nothing else does.
+ */
+export const prerender = false;
+
+const handle = Astro.params.handle ?? "";
+const post = await cms.api.posts.findOne({
+  where: {
+    kind: "and",
+    conditions: [
+      { kind: "compare", path: "handle", operator: "eq", value: handle },
+      { kind: "compare", path: "status", operator: "eq", value: "published" },
+    ],
+  },
+});
+
+// A draft and a handle nobody has used are the same answer to a reader. The
+// 404 is not cached: it would otherwise outlive the moment somebody presses
+// publish, which is the one case where a reader is watching.
+if (!post) return new Response(null, { status: 404 });
+
+await cachePage(Astro.response.headers, [postTag(handle)]);
+
+const html = richTextToHtml(post.body);
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{post.title}</title>
+  </head>
+  <body
+    style="font-family: ui-sans-serif, system-ui, sans-serif; margin: 0 auto; max-width: 42rem; padding: 4rem 1.5rem; line-height: 1.6;"
+  >
+    <p style="color: #666"><a href="/">← All posts</a></p>
+    <h1>{post.title}</h1>
+    {/* The editor's rich text, serialised by the CMS rather than by a
+        component tree: the same document renders identically in an RSS feed,
+        an email and here. */}
+    <article set:html={html} />
+  </body>
+</html>

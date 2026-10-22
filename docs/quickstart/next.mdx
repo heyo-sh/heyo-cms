@@ -1,0 +1,89 @@
+---
+title: Quickstart — Next.js
+description: A Heyo CMS project on Next.js, from an empty directory to an editable post.
+---
+
+# Next.js
+
+```bash
+bun create @heyo-sh/heyo-cms my-cms --template next --deployment vercel --database postgres
+cd my-cms
+cp .env.example .env     # set DATABASE_URL
+bun run db:migrate
+bun run seed
+bun run dev
+```
+
+- the site — `http://localhost:3000`
+- the panel — `http://localhost:3000/api/heyo-cms/admin`
+- the API — `http://localhost:3000/api/heyo-cms/posts`
+- the OpenAPI document — `http://localhost:3000/api/heyo-cms/openapi.json`
+
+Open the panel. A CMS with no accounts asks you to create the administrator
+right there, and that form closes behind the account it creates — the route
+behind it exists only while nobody has one. For a pipeline, or to keep the
+browser out of it, there is
+`bunx heyo-cms create-admin --email you@example.com` and
+`admin.auth.firstUser: false`.
+
+## The mount
+
+One file, and it never changes again — not when you add a collection, not
+when you install a plugin:
+
+```ts
+// app/api/heyo-cms/[...path]/route.ts
+import { cmsHandler } from "@heyo-sh/heyo-cms/next";
+
+import { cms } from "../../../../heyo-cms.config.ts";
+
+export const { GET, POST, PATCH, PUT, DELETE, HEAD, OPTIONS } = cmsHandler(cms);
+export const dynamic = "force-dynamic";
+```
+
+Every route the CMS answers lives under it: CRUD per collection, media,
+authentication, the trash, languages, the audit trail, OpenAPI, the panel and
+anything a plugin registers.
+
+## Reading content in a page
+
+`cms.api` is the same engine the REST route calls — same access control, same
+hooks — without HTTP in between, and it is typed from your collections:
+
+```tsx
+// app/page.tsx
+import { cms } from "../heyo-cms.config.ts";
+
+export default async function Home() {
+  const { docs } = await cms.api.posts.find({ limit: 10 });
+  return (
+    <ul>
+      {docs.map((post) => (
+        <li key={post.id}>{post.title}</li>
+      ))}
+    </ul>
+  );
+}
+
+export const dynamic = "force-dynamic";
+```
+
+Rename a field in `heyo-cms.config.ts` and this file stops compiling.
+
+## Changing the content model
+
+```bash
+bun run db:generate   # writes a migration — read it
+bun run db:migrate    # applies it
+bun run db:status     # applied, pending, and changes with no migration yet
+```
+
+Use Node 24+ for the CLI (native TypeScript loading), or run it through Bun.
+The default local storage is for development; select S3 or R2 before deploying
+to Vercel.
+
+## Imports in a generated project
+
+Relative imports carry their `.ts` extension. That is not decoration: the CLI
+runs under Node, which resolves ESM specifiers literally, and every bundler in
+the templates accepts them.

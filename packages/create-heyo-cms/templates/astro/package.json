@@ -1,0 +1,43 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "{{PACKAGE_MANAGER}}",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "start": "node ./dist/server/entry.mjs",
+    "typecheck": "astro check",
+    "db:generate": "heyo-cms generate",
+    "db:migrate": "heyo-cms migrate",
+    "db:status": "heyo-cms status",
+    "create-admin": "heyo-cms create-admin",
+    "seed": "heyo-cms seed",
+    "content:export": "heyo-cms export --out content.ndjson",
+    "content:import": "heyo-cms import content.ndjson"
+  },
+  "dependencies": {
+    "@astrojs/node": "11.1.6",
+    "@astrojs/react": "7.1.1",
+    "@fontsource-variable/figtree": "5.3.0",
+    "@heyo-sh/heyo-cms": "{{HEYO_CMS_VERSION}}",
+    "@heyo-sh/heyo-cms-admin": "{{HEYO_CMS_VERSION}}",
+    "@heyo-sh/heyo-ui": "0.4.1",
+    "astro": "7.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.5",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3"
+  }
+}

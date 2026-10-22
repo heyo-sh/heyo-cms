@@ -1,7 +1,7 @@
 import type { ZodType } from "zod";
 
 import type { Actor } from "./actor";
-import type { ComponentType, JsonValue } from "./json";
+import type { ComponentType, JsonObject, JsonValue } from "./json";
 import type { ColumnDefinition } from "./schema";
 
 /** A model reference. The provider id comes from the pi catalogue (section 8). */
@@ -57,12 +57,14 @@ export interface FieldAccess {
 /** Panel-only presentation. The engine never reads these. */
 export interface FieldAdminOptions {
   placeholder?: string;
-  width?: "full" | "half" | "third";
-  position?: "main" | "sidebar";
   hidden?: boolean;
-  /** Shows the field only when the rule matches the form state. */
-  condition?: (document: Record<string, unknown>) => boolean;
 }
+
+/** Server-side, deterministic generator. `fields` contains only readable sibling fields. */
+export type FieldGenerator = (args: {
+  fields: JsonObject;
+  locale: string;
+}) => JsonValue | Promise<JsonValue>;
 
 /** Options every field accepts, whatever its type. */
 export interface FieldOptions {
@@ -74,6 +76,11 @@ export interface FieldOptions {
   unique?: boolean;
   index?: boolean;
   readOnly?: boolean;
+  /** Generate this field from the current form values, without AI. */
+  generate?: FieldGenerator;
+  /** Generate an AI suggestion for this particular field; context names sibling fields. */
+  aiGenerate?: FieldAiAction;
+  /** @deprecated Use aiGenerate for field generation. Other legacy actions remain supported. */
   ai?: FieldAiConfig;
   access?: FieldAccess;
   admin?: FieldAdminOptions;
@@ -96,6 +103,8 @@ export interface FieldDefinition<TValue = unknown> {
   readonly localized: boolean;
   readonly required: boolean;
   readonly defaultValue?: JsonValue;
+  readonly generate?: FieldGenerator;
+  readonly aiGenerate?: FieldAiAction;
   readonly ai?: FieldAiConfig;
   readonly access?: FieldAccess;
   readonly admin?: FieldAdminOptions;

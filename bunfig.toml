@@ -1,0 +1,24 @@
+# One React, and the install layout that guarantees it.
+#
+# The panel is a React application that imports React components from a
+# published package (`@heyo-sh/heyo-ui`), and React is a peer of both. Under
+# the default hoisted layout Bun answers those two requests with two
+# *physical* copies of the same version — the workspace's `react` is a link
+# into `node_modules/.bun`, while a package hoisted to the repository root
+# gets a clone beside it — and two copies is two module instances. The second
+# instance has no dispatcher installed, so the first hook heyo-ui calls
+# throws "Invalid hook call": a panel that does not render, and a DOM suite
+# that fails before its first assertion.
+#
+# The isolated linker is pnpm's layout: every package is realised once in the
+# store and reached through a symlink, so there is exactly one `react` on disk
+# and every importer resolves to it. It is also what the bundler reads, which
+# is the part that matters beyond the tests — a build with two Reacts in it
+# ships a panel that breaks in the browser.
+#
+# This used to be masked: `@heyo-sh/heyo-ui` carried a patch, and a patched
+# dependency is installed per workspace rather than hoisted, which happened to
+# put it next to the panel's own React. The patch is gone, so the guarantee
+# has to be stated rather than inherited.
+[install]
+linker = "isolated"

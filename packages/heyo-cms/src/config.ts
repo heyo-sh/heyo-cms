@@ -1,8 +1,32 @@
+import { isValidScope } from "./access/permissions";
+import {
+  defaultAdminPath,
+  defaultBasePath,
+  defaultMigrationsDirectory,
+} from "./defaults";
+import { createAi } from "./ai/index";
+import { getAiAction, registeredAiActions } from "./ai/registry";
+import { describeEditorSchema } from "./editor/index";
+import { createAuth } from "./auth/service";
 import { CmsConfigError } from "./errors";
+import { trimTrailingSlashes } from "./strings";
 import { parseByteSize, parseDuration } from "./duration";
+import { createActivity } from "./engine/activity";
+import { CmsEngine } from "./engine/engine";
+import { hookPipelineEntries } from "./engine/hooks";
+import { localeRecords } from "./i18n/index";
+import { createCmsHttp, type CmsHttp } from "./http/handler";
+import { reservedMediaSubRoutes } from "./http/routes/media";
+import { mediaGcJob } from "./media/gc";
+import { createMedia } from "./media/service";
 import { buildSchemaSnapshot } from "./schema/snapshot";
 import { systemTableNames } from "./schema/system";
+import { createWebhooks, webhookRetryJob } from "./webhooks/index";
+import type { WebhookRuntime } from "./webhooks/service";
 import type { Actor } from "./types/actor";
+import type { CmsAi } from "./types/ai";
+import type { GlobalsApi, LocalApi } from "./types/api";
+import type { CmsAuth } from "./types/auth";
 import type {
   CollectionDefinition,
   CollectionDefinitionInput,
@@ -10,26 +34,72 @@ import type {
   GlobalDefinition,
   GlobalsConfig,
   HeyoCmsConfig,
+  I18nConfig,
   ResolvedCmsConfig,
   ResolvedCollection,
+  ResolvedPluginHooks,
 } from "./types/config";
 import type { DatabaseAdapter } from "./types/database";
-import type { AnyEventType, CmsEventListener } from "./types/events";
+import type { AnyEventType, CmsEvent, CmsEventListener } from "./types/events";
 import type { FieldDefinition, FieldsConfig } from "./types/fields";
 import type {
+  AuthInspection,
   CmsInspection,
   CmsInstance,
   CollectionInspection,
-  HookPipelineEntry,
+  PluginInspection,
+  StorageInspection,
 } from "./types/instance";
+import type { CmsMedia } from "./types/media";
 import type { CmsPlugin } from "./types/plugin";
 
-export const defaultBasePath = "/api/heyo-cms";
-export const defaultAdminPath = "/admin";
-export const defaultMigrationsDirectory = "./migrations";
+export {
+  defaultAdminPath,
+  defaultBasePath,
+  defaultMigrationsDirectory,
+} from "./defaults";
+
+/**
+ * Path segments the router owns, so a collection cannot take one.
+ *
+ * A collection is mounted at its slug under `basePath`, next to the endpoints
+ * the CMS serves for itself. Without this check a collection called `users`
+ * would collide with `GET /users`, and the router would say so — but only when
+ * something first built it, which on a serverless deployment is the first
+ * request a user makes. Here it is a start-up error with the fix in it.
+ */
+const reservedRouteSegments = new Set([
+  "activity",
+  "admin",
+  "ai",
+  "auth",
+  "globals",
+  "jobs",
+  "locales",
+  "media",
+  "openapi.json",
+  "panel",
+  "roles",
+  "trash",
+  "users",
+  "webhooks",
+]);
 
 const nameFormat = /^[a-z][a-z0-9_]*$/;
+/**
+ * Field names may be camelCase; collection names may not.
+ *
+ * A collection name becomes a slug, and a slug is a URL. A field name becomes
+ * a key in the document body and a quoted segment of an index name, so case
+ * survives it intact — and `seoTitle` is what a TypeScript developer will
+ * write whatever this expression says. The one character still forbidden is
+ * the dot, because `where: { "a.b": ... }` addresses a path and a dot in a
+ * name would make that ambiguous.
+ */
+const fieldNameFormat = /^[a-z][a-zA-Z0-9_]*$/;
 const slugFormat = /^[a-z][a-z0-9-]*$/;
+/** BCP 47 as far as anybody actually writes it: `en`, `pt-BR`, `de-AT-1996`. */
+const localeCodeFormat = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
 
 /**
  * Declares a collection.
@@ -66,7 +136,9 @@ export function defineGlobal<TFields extends FieldsConfig>(
 export function heyoCms<
   const TCollections extends CollectionsConfig,
   const TGlobals extends GlobalsConfig = Record<string, never>,
->(config: HeyoCmsConfig<TCollections, TGlobals>): CmsInstance<TCollections> {
+>(
+  config: HeyoCmsConfig<TCollections, TGlobals>,
+): CmsInstance<TCollections, TGlobals> {
   const resolved = resolveConfig(config);
   const schema = buildSchemaSnapshot({
     collections: resolved.collections,
@@ -80,10 +152,145 @@ export function heyoCms<
   let adapter: DatabaseAdapter | undefined;
   let pending: Promise<DatabaseAdapter> | undefined;
 
-  const instance: CmsInstance<TCollections> = {
+  /**
+   * Where a committed event ends up.
+   *
+   * A listener that throws fails the delivery, which the outbox then retries
+   * with backoff — the same treatment a webhook gets, because "it ran" has to
+   * mean the same thing for both (section 7).
+   */
+  const dispatch = async (event: CmsEvent): Promise<void> => {
+    const subscribed = [
+      ...(listeners.get(event.type) ?? []),
+      ...(listeners.get("*") ?? []),
+    ];
+    for (const listener of subscribed) await listener(event);
+    // Subscribers last and separately: a webhook that is down must not fail
+    // the outbox row, because that would replay the event to every listener
+    // above on the next pass. `dispatch` records its own failures and never
+    // throws (section 7).
+    await webhooks.dispatch(event);
+  };
+
+  const engine = new CmsEngine({
+    config: resolved,
+    database: () => instance.database(),
+    dispatch,
+  });
+
+  /**
+   * Auth shares the engine's outbox rather than owning one.
+   *
+   * An invitation and a document change are the same kind of fact to a
+   * webhook subscriber, so they are written by the same mechanism, inside the
+   * transaction that caused them (section 5).
+   */
+  const auth: CmsAuth = createAuth({
+    config: resolved,
+    database: () => instance.database(),
+    emit: (tx, events, meta) => engine.appendEvents(tx, events, meta),
+    deliver: () => engine.deliverSoon(),
+  });
+
+  /** Media shares the outbox for the same reason auth does. */
+  const media: CmsMedia = createMedia({
+    config: resolved,
+    database: () => instance.database(),
+    emit: (tx, events, meta) => engine.appendEvents(tx, events, meta),
+    deliver: () => engine.deliverSoon(),
+  });
+
+  /**
+   * The language list and the audit trail.
+   *
+   * Both exist as instance methods for the same reason `cms.api` does: the
+   * routes in the HTTP layer call these, so a panel, a seed script and a
+   * `curl` cannot disagree about what listing the languages means. The list
+   * is computed once because it is configuration: `i18n.locales` cannot
+   * change while the process runs.
+   */
+  const locales = localeRecords(resolved);
+  const activity = createActivity({ database: () => instance.database() });
+
+  /**
+   * Delivery to subscribers, sharing the engine's outbox.
+   *
+   * Built before the engine's dispatcher runs rather than lazily: a
+   * subscription that exists has to receive the first event after start-up,
+   * not the second.
+   */
+  const webhooks: WebhookRuntime = createWebhooks({
+    config: resolved,
+    database: () => instance.database(),
+    emit: (tx, events, meta) => engine.appendEvents(tx, events, meta),
+    deliver: () => engine.deliverSoon(),
+  });
+
+  /**
+   * `cms.ai`.
+   *
+   * Needs the instance, not the engine: an action reads the document through
+   * `cms.api`, so access control, field read rules and locale resolution
+   * apply to what reaches a model exactly as they do to what reaches a
+   * browser (section 8).
+   */
+  const ai: CmsAi = createAi({
+    config: resolved,
+    database: () => instance.database(),
+    cms: () => instance as CmsInstance,
+    emit: (tx, events, meta) => engine.appendEvents(tx, events, meta),
+    deliver: () => engine.deliverSoon(),
+  });
+
+  const jobs = engine.buildJobs();
+  if (resolved.webhooks?.enabled) {
+    jobs.register(webhookRetryJob(webhooks));
+  }
+  if (resolved.uploads) {
+    // Registered only when there is storage to collect from, so
+    // `cms.inspect().jobs` lists what will actually run rather than what the
+    // package happens to contain.
+    jobs.register(
+      mediaGcJob({
+        config: resolved,
+        database: () => instance.database(),
+        storage: () => media.storage(),
+        emit: (tx, events, meta) => engine.appendEvents(tx, events, meta),
+        deliver: () => engine.deliverSoon(),
+      }),
+    );
+  }
+
+  /**
+   * The HTTP layer, built on first use.
+   *
+   * Not at configuration time: a CLI that generates a migration, a seed
+   * script and a test of `cms.api` never serve a request, and making all of
+   * them assemble a router would be a cost with no beneficiary. Memoised, so
+   * the second request matches against the same instance as the first.
+   */
+  let http: CmsHttp | undefined;
+  const httpLayer = (): CmsHttp => {
+    http ??= createCmsHttp(instance as CmsInstance);
+    return http;
+  };
+
+  const instance: CmsInstance<TCollections, TGlobals> = {
     _config: Object.freeze(resolved),
     schema,
     collections: config.collections,
+    handler: (request: Request) => httpLayer().handler(request),
+    _router: { routes: () => httpLayer().routes() },
+    api: engine.buildApi() as unknown as LocalApi<TCollections>,
+    globals: engine.buildGlobals() as unknown as GlobalsApi<TGlobals>,
+    auth,
+    media,
+    ai,
+    webhooks,
+    trash: engine.buildTrash(),
+    jobs,
+    locales: { list: () => locales },
+    activity,
 
     inspect(): CmsInspection {
       return {
@@ -96,13 +303,48 @@ export function heyoCms<
             jsonQuery: false,
           },
         },
+        storage: inspectStorage(resolved),
         collections: inspectCollections(resolved),
         schema,
-        hooks: hookPipeline(resolved),
-        // The router arrives with stage 7; reporting an empty list is honest,
-        // inventing route names would not be.
-        routes: [],
-        plugins: resolved.plugins.map((plugin) => plugin.id),
+        // Produced by the builder the engine runs, so the printed order is
+        // the executed one rather than a second opinion about it.
+        hooks: hookPipelineEntries(resolved),
+        // From the router itself, in match order: the antidote to "magic" is
+        // that the generated surface is printable (section 10). Asking for it
+        // builds the router, which is the point — an answer assembled from
+        // the configuration a second time could differ from the one serving
+        // requests.
+        routes: httpLayer().routes(),
+        admin: {
+          path: `${resolved.basePath}${resolved.admin.path}`,
+          panel: resolved.admin.assets?.id ?? null,
+        },
+        plugins: inspectPlugins(resolved),
+        auth: inspectAuth(resolved),
+        ai: {
+          enabled: resolved.ai !== undefined,
+          defaultModel: resolved.ai?.defaultModel ?? null,
+          assistant:
+            resolved.ai !== undefined &&
+            resolved.ai.assistant?.enabled !== false,
+          actions: registeredAiActions(),
+          providers: Object.keys(resolved.ai?.auth ?? {}).sort(),
+          panelManagedKeys: resolved.ai?.storage?.secret !== undefined,
+        },
+        webhooks: {
+          enabled: resolved.webhooks?.enabled === true,
+          signed: resolved.webhooks?.signing?.secret !== undefined,
+          retries: resolved.webhooks?.delivery?.retries ?? 5,
+        },
+        editor: describeEditorSchema(),
+        jobs: instance.jobs.list(),
+        trash: {
+          enabled: resolved.trash.enabled,
+          purgeAfter:
+            resolved.trash.purgeAfter === false
+              ? null
+              : resolved.trash.purgeAfter,
+        },
       };
     },
 
@@ -130,7 +372,14 @@ export function heyoCms<
       };
     },
 
+    drainEvents(limit?: number): Promise<number> {
+      return engine.drainEvents(limit);
+    },
+
     async close(): Promise<void> {
+      // Deliveries in flight hold the adapter; closing underneath them would
+      // turn a successful write into a lost event.
+      await engine.settle();
       await adapter?.close?.();
       adapter = undefined;
       pending = undefined;
@@ -138,6 +387,7 @@ export function heyoCms<
     },
   };
 
+  engine.bind(instance as CmsInstance);
   return instance;
 }
 
@@ -150,9 +400,23 @@ function resolveConfig(
 ): ResolvedCmsConfig {
   const basePath = normaliseBasePath(config.basePath ?? defaultBasePath);
   const reserved = new Set(systemTableNames());
+  const plugins = config.plugins ?? [];
+  validatePlugins(plugins);
+
+  // Plugins contribute before anything is resolved: a collection a plugin
+  // brings is a collection in every sense — it gets routes, an entry in
+  // `cms.api`, a place in the schema and a migration — and a field a plugin
+  // adds has to be there when the collection's zod schema is built.
+  const definitions = mergePluginCollections(config.collections, plugins);
+  const pluginHooks = applyCollectionPatches({
+    plugins,
+    collections: definitions,
+    globals: (config.globals ?? {}) as Record<string, GlobalDefinition>,
+    basePath,
+  });
 
   const collections: Record<string, ResolvedCollection> = {};
-  for (const [name, definition] of Object.entries(config.collections)) {
+  for (const [name, definition] of Object.entries(definitions)) {
     collections[name] = resolveCollection(
       name,
       definition,
@@ -167,11 +431,12 @@ function resolveConfig(
 
   assertUniqueSlugs({ ...collections, ...globals });
   validateRelations({ ...collections, ...globals });
-  validateChat({ ...collections, ...globals });
+  assertNoLegacyChat(config);
   validateHookTargets(config, collections, globals);
-  validatePlugins(config.plugins ?? []);
+  validateFieldAi({ ...collections, ...globals });
   validateI18n(config);
   validateRbac(config);
+  validateAuth(config);
   validateUploads(config);
   validateAi(config);
   validateWebhooks(config);
@@ -184,16 +449,10 @@ function resolveConfig(
     database: config.database,
     admin: {
       ...config.admin,
-      path: config.admin?.path ?? defaultAdminPath,
+      path: normaliseAdminPath(config.admin?.path ?? defaultAdminPath),
     },
     ...(config.rbac === undefined ? {} : { rbac: config.rbac }),
-    i18n: {
-      locales: config.i18n?.locales ?? "dynamic",
-      defaultLocale: config.i18n?.defaultLocale ?? "en",
-      ...(config.i18n?.fallback === undefined
-        ? {}
-        : { fallback: config.i18n.fallback }),
-    },
+    i18n: resolveI18n(config.i18n),
     ...(config.uploads === undefined ? {} : { uploads: config.uploads }),
     ...(config.ai === undefined ? {} : { ai: config.ai }),
     ...(config.webhooks === undefined ? {} : { webhooks: config.webhooks }),
@@ -207,7 +466,9 @@ function resolveConfig(
     ...(config.databaseHooks === undefined
       ? {}
       : { databaseHooks: config.databaseHooks }),
-    plugins: config.plugins ?? [],
+    plugins,
+    pluginHooks,
+    ...(config.telemetry === undefined ? {} : { telemetry: config.telemetry }),
     migrationsDirectory:
       config.migrations?.directory ?? defaultMigrationsDirectory,
   };
@@ -238,18 +499,27 @@ function resolveCollection(
       `"${name}" is a reserved system name; pick another`,
     );
   }
+  if (reservedRouteSegments.has(slug)) {
+    throw new CmsConfigError(
+      `collections.${name}`,
+      `"${slug}" is a URL the CMS serves itself; give the collection another slug`,
+    );
+  }
 
   const fields: Record<string, FieldDefinition> = {};
   for (const [fieldName, field] of Object.entries(definition.fields)) {
-    if (!nameFormat.test(fieldName)) {
+    if (!fieldNameFormat.test(fieldName)) {
       throw new CmsConfigError(
         `collections.${name}.fields.${fieldName}`,
-        "a field name must be lowercase letters, digits and underscores, starting with a letter",
+        "a field name must be letters, digits and underscores, starting with a lowercase letter",
       );
     }
-    // Paths into the document body are dotted, so a dot in a field name would
-    // make `where: { "a.b": ... }` ambiguous. The name format already forbids
-    // it; this is the reason it does.
+    if (field.required && field.admin?.hidden === true) {
+      throw new CmsConfigError(
+        `collections.${name}.fields.${fieldName}.admin.hidden`,
+        "a hidden field cannot be required; remove required or show the field",
+      );
+    }
     fields[fieldName] = field;
   }
 
@@ -267,7 +537,6 @@ function resolveCollection(
     kind,
     fields,
     access: (definition.access ?? {}) as ResolvedCollection["access"],
-    ...(definition.ai === undefined ? {} : { ai: definition.ai }),
     ...(definition.admin === undefined ? {} : { admin: definition.admin }),
   };
 }
@@ -312,28 +581,41 @@ function validateRelations(
   }
 }
 
-/** Chat may only see fields that exist, and may only write fields it can see. */
-function validateChat(collections: Record<string, ResolvedCollection>): void {
-  for (const collection of Object.values(collections)) {
-    const chat = collection.ai?.chat;
-    if (!chat) continue;
+/**
+ * The document chat is gone, and silence is the wrong way to say so.
+ *
+ * `collection.ai.chat` and `ai.chat` configured a per-collection whitelist for
+ * a chat that only ever proposed changes. The panel-wide assistant replaces it
+ * and derives its reach from the live configuration and the signed-in actor
+ * instead, so the old keys have no meaning — but a deployment that still has
+ * them has an opinion about what AI may read, and ignoring that opinion while
+ * shipping an agent that writes would be the worst possible upgrade.
+ *
+ * Checked against the untyped object rather than the type, because the
+ * configuration is routinely written in JavaScript or assembled at runtime and
+ * the type system is not there to catch it.
+ */
+function assertNoLegacyChat(
+  config: HeyoCmsConfig<CollectionsConfig, GlobalsConfig>,
+): void {
+  const ai = config.ai as { chat?: unknown } | undefined;
+  if (ai && ai.chat !== undefined) {
+    throw new CmsConfigError(
+      "ai.chat",
+      "document chat was replaced by the panel-wide assistant. Use ai.assistant, which takes a model, instructions and limits; what the agent may read and write now comes from the configuration and the actor at runtime",
+    );
+  }
 
-    for (const field of chat.context) {
-      if (!(field in collection.fields)) {
-        throw new CmsConfigError(
-          `collections.${collection.name}.ai.chat.context`,
-          `"${field}" is not a field of this collection`,
-        );
-      }
-    }
-    for (const field of chat.writable ?? []) {
-      if (!chat.context.includes(field)) {
-        throw new CmsConfigError(
-          `collections.${collection.name}.ai.chat.writable`,
-          `"${field}" is not in context; the chat cannot write a field it cannot read`,
-        );
-      }
-    }
+  const everything = {
+    ...(config.collections as Record<string, { ai?: unknown }>),
+    ...((config.globals ?? {}) as Record<string, { ai?: unknown }>),
+  };
+  for (const [name, definition] of Object.entries(everything)) {
+    if (definition?.ai === undefined) continue;
+    throw new CmsConfigError(
+      `collections.${name}.ai`,
+      "per-collection ai.chat was removed with document chat. Delete the key; the assistant reads the collection through the same access control as everything else",
+    );
   }
 }
 
@@ -353,7 +635,225 @@ function validateHookTargets(
   }
 }
 
-function validatePlugins(plugins: CmsPlugin<never>[]): void {
+/**
+ * Collections a plugin brings, merged with the ones the application declared.
+ *
+ * A collision throws rather than resolving in anybody's favour. "The plugin
+ * wins" would let an upgrade silently replace a collection full of content;
+ * "the application wins" would leave the plugin's hooks and routes pointing
+ * at fields that are not there. Neither is recoverable from a log line.
+ */
+function mergePluginCollections(
+  declared: CollectionsConfig,
+  plugins: CmsPlugin<unknown>[],
+): Record<string, CollectionDefinition> {
+  const merged: Record<string, CollectionDefinition> = { ...declared };
+  const owners = new Map<string, string>();
+
+  for (const plugin of plugins) {
+    for (const [name, definition] of Object.entries(
+      plugin.schema?.collections ?? {},
+    )) {
+      if (name in declared) {
+        throw new CmsConfigError(
+          `plugins.${plugin.id}.schema.collections.${name}`,
+          `the configuration already declares a collection called "${name}"`,
+        );
+      }
+      const owner = owners.get(name);
+      if (owner) {
+        throw new CmsConfigError(
+          `plugins.${plugin.id}.schema.collections.${name}`,
+          `"${owner}" already declares a collection called "${name}"`,
+        );
+      }
+      owners.set(name, plugin.id);
+      merged[name] = definition;
+    }
+  }
+  return merged;
+}
+
+interface PatchOptions {
+  plugins: CmsPlugin<unknown>[];
+  collections: Record<string, CollectionDefinition>;
+  globals: Record<string, GlobalDefinition>;
+  basePath: string;
+}
+
+/**
+ * `extendCollections()`: fields and hooks a plugin adds to somebody else's
+ * collection.
+ *
+ * Fields are merged into the definition before it is resolved, so a plugin's
+ * field is indistinguishable from a declared one by the time anything reads
+ * it — same validation, same column, same place in the generated migration.
+ * Hooks are collected rather than applied, because the order they run in is
+ * a property of the whole configuration and is decided in one place
+ * (section 5).
+ */
+function applyCollectionPatches(options: PatchOptions): ResolvedPluginHooks[] {
+  const hooks: ResolvedPluginHooks[] = [];
+  const fieldOwners = new Map<string, string>();
+
+  for (const plugin of options.plugins) {
+    if (!plugin.extendCollections) continue;
+    const patches = plugin.extendCollections({
+      collections: options.collections,
+      basePath: options.basePath,
+    });
+
+    for (const patch of patches) {
+      const target =
+        options.collections[patch.collection] ??
+        options.globals[patch.collection];
+      if (!target) {
+        throw new CmsConfigError(
+          `plugins.${plugin.id}.extendCollections`,
+          `patches "${patch.collection}", which is not a collection or a global`,
+        );
+      }
+
+      for (const [name, field] of Object.entries(patch.fields ?? {})) {
+        const owner = fieldOwners.get(`${patch.collection}.${name}`);
+        if (name in target.fields) {
+          throw new CmsConfigError(
+            `plugins.${plugin.id}.extendCollections`,
+            owner
+              ? `"${owner}" already added "${name}" to ${patch.collection}`
+              : `${patch.collection} already has a field called "${name}"`,
+          );
+        }
+        fieldOwners.set(`${patch.collection}.${name}`, plugin.id);
+        // The definition object is the application's; patching it in place
+        // would mutate a module somebody else imported.
+        target.fields = { ...target.fields, [name]: field };
+      }
+
+      if (patch.hooks) {
+        hooks.push({
+          plugin: plugin.id,
+          collection: patch.collection,
+          hooks: patch.hooks,
+          priority: 0,
+        });
+      }
+    }
+  }
+
+  return hooks;
+}
+
+/**
+ * An AI action has to make sense for the field it is on.
+ *
+ * The field type already rejects an unknown action key (`fields/registry`).
+ * This is the other half: a registered action declares which types it
+ * applies to and whether it needs a localized field, and a `translate` on a
+ * field that stores one value for every language is a mistake nobody will
+ * notice until an editor overwrites the original.
+ */
+function validateFieldAi(
+  collections: Record<string, ResolvedCollection>,
+): void {
+  for (const collection of Object.values(collections)) {
+    for (const [fieldName, field] of Object.entries(collection.fields)) {
+      if (field.aiGenerate !== undefined) {
+        validateFieldAiOptions(
+          collection,
+          fieldName,
+          field.aiGenerate,
+          `collections.${collection.name}.fields.${fieldName}.aiGenerate`,
+        );
+      }
+      for (const [action, options] of Object.entries(field.ai ?? {})) {
+        if (options !== true) {
+          validateFieldAiOptions(
+            collection,
+            fieldName,
+            options,
+            `collections.${collection.name}.fields.${fieldName}.ai.${action}`,
+          );
+        }
+        const definition = getAiAction(action);
+        const where = `collections.${collection.name}.fields.${fieldName}.ai.${action}`;
+        if (!definition) {
+          // An unregistered key is a custom action, and a custom action is
+          // only a custom action if it brings an instruction.
+          if (options === true || options.prompt === undefined) {
+            throw new CmsConfigError(
+              where,
+              "is not a registered AI action; register it with defineAiAction() or give it a prompt",
+            );
+          }
+          continue;
+        }
+        if (
+          !definition.appliesTo.includes("*") &&
+          !definition.appliesTo.includes(field.type)
+        ) {
+          throw new CmsConfigError(
+            where,
+            `does not apply to a ${field.type} field; it applies to ${definition.appliesTo.join(", ")}`,
+          );
+        }
+        if (definition.requiresLocalized && !field.localized) {
+          throw new CmsConfigError(
+            where,
+            "needs a localized field; this one stores a single value for every language",
+          );
+        }
+      }
+    }
+  }
+}
+
+function validateFieldAiOptions(
+  collection: ResolvedCollection,
+  fieldName: string,
+  options: {
+    context?: string[];
+    maxLength?: number;
+    model?: { provider: string; model: string };
+  },
+  where: string,
+): void {
+  if (options.context !== undefined && !Array.isArray(options.context)) {
+    throw new CmsConfigError(
+      `${where}.context`,
+      "must be an array of field names",
+    );
+  }
+  const seen = new Set<string>();
+  for (const name of options.context ?? []) {
+    if (
+      typeof name !== "string" ||
+      !collection.fields[name] ||
+      name === fieldName ||
+      seen.has(name)
+    ) {
+      throw new CmsConfigError(
+        `${where}.context`,
+        `"${name}" must name a different, existing field of ${collection.name} (only once)`,
+      );
+    }
+    seen.add(name);
+  }
+  if (
+    options.maxLength !== undefined &&
+    (!Number.isInteger(options.maxLength) || options.maxLength < 1)
+  ) {
+    throw new CmsConfigError(
+      `${where}.maxLength`,
+      "must be a positive integer",
+    );
+  }
+  if (options.model && (!options.model.provider || !options.model.model)) {
+    throw new CmsConfigError(`${where}.model`, "needs a provider and a model");
+  }
+}
+
+function validatePlugins(plugins: CmsPlugin<unknown>[]): void {
   const seen = new Set<string>();
   for (const plugin of plugins) {
     if (seen.has(plugin.id)) {
@@ -383,35 +883,56 @@ function validatePlugins(plugins: CmsPlugin<never>[]): void {
   }
 }
 
+/**
+ * `i18n`, filled in.
+ *
+ * No section at all means one language called `en`, because a site that never
+ * thinks about translation should not have to say so. A section that names
+ * locales without naming a default takes the first one: the order somebody
+ * typed is a statement about which language the content is written in.
+ */
+function resolveI18n(i18n: I18nConfig | undefined): Required<I18nConfig> {
+  const locales = i18n?.locales;
+  const defaultLocale = i18n?.defaultLocale ?? locales?.[0] ?? "en";
+  return { defaultLocale, locales: locales ?? [defaultLocale] };
+}
+
 function validateI18n(
   config: HeyoCmsConfig<CollectionsConfig, GlobalsConfig>,
 ): void {
   const i18n = config.i18n;
   if (!i18n) return;
 
-  if (Array.isArray(i18n.locales)) {
-    const codes = i18n.locales.map((locale) => locale.code);
-    if (new Set(codes).size !== codes.length) {
-      throw new CmsConfigError("i18n.locales", "duplicate locale codes");
-    }
-    if (!codes.includes(i18n.defaultLocale)) {
+  const codes = i18n.locales;
+  if (codes !== undefined) {
+    if (codes.length === 0) {
       throw new CmsConfigError(
-        "i18n.defaultLocale",
-        `"${i18n.defaultLocale}" is not in the configured locales`,
+        "i18n.locales",
+        "at least one locale; leave the section out for a single-language site",
       );
     }
-  }
-
-  const fallback = i18n.fallback;
-  if (fallback && fallback.mode === "chain") {
-    for (const [locale, chain] of Object.entries(fallback.chain)) {
-      if (chain.includes(locale)) {
+    for (const code of codes) {
+      if (!localeCodeFormat.test(code)) {
         throw new CmsConfigError(
-          `i18n.fallback.chain.${locale}`,
-          "a locale cannot fall back to itself",
+          "i18n.locales",
+          `"${code}" is not a locale code; use a BCP 47 tag such as "en" or "pt-BR"`,
         );
       }
     }
+    if (new Set(codes).size !== codes.length) {
+      throw new CmsConfigError("i18n.locales", "duplicate locale codes");
+    }
+  }
+
+  // The default locale is what every read falls back to, so one that is not
+  // offered would make every untranslated field resolve to nothing — a typo
+  // that shows up as empty pages rather than as an error.
+  const defaultLocale = i18n.defaultLocale;
+  if (defaultLocale !== undefined && codes && !codes.includes(defaultLocale)) {
+    throw new CmsConfigError(
+      "i18n.defaultLocale",
+      `"${defaultLocale}" is not in i18n.locales (${codes.map((code) => `"${code}"`).join(", ")})`,
+    );
   }
 }
 
@@ -422,6 +943,12 @@ function validateRbac(
   if (!rbac) return;
 
   for (const [role, permissions] of Object.entries(rbac.roles)) {
+    if (!/^[a-z][a-z0-9_-]*$/.test(role)) {
+      throw new CmsConfigError(
+        `rbac.roles.${role}`,
+        "a role name must be lowercase letters, digits, dashes and underscores, starting with a letter",
+      );
+    }
     for (const permission of permissions) {
       if (permission === "*") continue;
       if (!/^[a-z0-9_*-]+:[a-z0-9_*-]+$/.test(permission)) {
@@ -440,6 +967,46 @@ function validateRbac(
   }
 }
 
+/**
+ * The authentication section, checked while the module loads.
+ *
+ * Credentials are deliberately not required here — a template that lists
+ * `github` has to start on a laptop where the OAuth app does not exist yet,
+ * and the sign-in attempt is a better place to say so (section 10). What is
+ * checked is everything that can only be a mistake.
+ */
+function validateAuth(
+  config: HeyoCmsConfig<CollectionsConfig, GlobalsConfig>,
+): void {
+  const auth = config.admin?.auth;
+  if (!auth) return;
+
+  const seen = new Set<string>();
+  for (const method of auth.methods) {
+    if (seen.has(method)) {
+      throw new CmsConfigError("admin.auth.methods", `"${method}" is listed twice`); // prettier-ignore
+    }
+    seen.add(method);
+  }
+  for (const scope of auth.apiKeys?.scopes ?? []) {
+    if (!isValidScope(scope)) {
+      throw new CmsConfigError(
+        "admin.auth.apiKeys.scopes",
+        `"${scope}" is not a scope; use "read", "write", "delete", "*" or "collection:action"`,
+      );
+    }
+  }
+  // Roles arriving from an identity provider that the configuration never
+  // declared would silently grant nothing, which looks exactly like a broken
+  // mapping and is impossible to debug from the panel.
+  if (auth.sso?.mapRoles && !config.rbac) {
+    throw new CmsConfigError(
+      "admin.auth.sso.mapRoles",
+      "maps claims onto roles, but no roles are configured; add rbac.roles",
+    );
+  }
+}
+
 function validateUploads(
   config: HeyoCmsConfig<CollectionsConfig, GlobalsConfig>,
 ): void {
@@ -454,9 +1021,68 @@ function validateUploads(
     parseDuration(purgeAfter, "uploads.retention.purgeAfter");
   }
 
-  const quality = uploads.images?.quality;
+  const images = uploads.images;
+  const quality = images?.quality;
   if (quality !== undefined && (quality < 1 || quality > 100)) {
     throw new CmsConfigError("uploads.images.quality", "must be between 1 and 100"); // prettier-ignore
+  }
+
+  for (const [name, size] of Object.entries(images?.variants?.sizes ?? {})) {
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) {
+      throw new CmsConfigError(
+        `uploads.images.variants.sizes.${name}`,
+        "a size name ends up in a URL; use lowercase letters, digits and dashes",
+      );
+    }
+    if (reservedMediaSubRoutes.includes(name)) {
+      // A size name is a URL segment: `/media/:id/thumb` serves the size and
+      // `/media/:id/usages` serves the references. The static route wins, so
+      // a size called `usages` would be unreachable rather than broken —
+      // which is worse, because nothing would ever say so.
+      throw new CmsConfigError(
+        `uploads.images.variants.sizes.${name}`,
+        `"${name}" is a media endpoint; pick another size name`,
+      );
+    }
+    if (size.width === undefined && size.height === undefined) {
+      throw new CmsConfigError(
+        `uploads.images.variants.sizes.${name}`,
+        "needs a width, a height, or both",
+      );
+    }
+    if (
+      size.fit === "cover" &&
+      (size.width === undefined || size.height === undefined)
+    ) {
+      // prettier-ignore
+      // `cover` means "fill this box and crop the rest", and a box with one
+      // side missing is not a box.
+      throw new CmsConfigError(
+        `uploads.images.variants.sizes.${name}`,
+        'fit: "cover" needs both a width and a height',
+      );
+    }
+  }
+
+  // A transformation nothing can perform is a promise the configuration
+  // cannot keep, and the first upload is a bad moment to find out.
+  // `on-demand` without a processor is deliberately allowed: that is the
+  // arrangement where an image CDN does the resizing (section 6).
+  if (images && !images.processor) {
+    const needs =
+      images.convert !== undefined
+        ? "convert"
+        : images.maxDimensions !== undefined
+          ? "maxDimensions"
+          : images.variants?.mode === "pregenerate"
+            ? 'variants.mode: "pregenerate"'
+            : null;
+    if (needs) {
+      throw new CmsConfigError(
+        "uploads.images.processor",
+        `${needs} has to render pixels, and nothing here can. Add a processor (sharpImages() from "@heyo-sh/heyo-cms/uploads"), or drop the option.`,
+      );
+    }
   }
 }
 
@@ -466,26 +1092,61 @@ function validateAi(
   const ai = config.ai;
   if (!ai) return;
 
-  if (Object.keys(ai.auth).length === 0) {
+  const configured = new Set(Object.keys(ai.auth ?? {}));
+  // Keys may also live in the database, encrypted, and be typed into the
+  // panel (section 8). A deployment that chose that has no credentials here
+  // at build time, and demanding a placeholder would be theatre.
+  const panelManaged = ai.storage?.secret !== undefined;
+
+  if (configured.size === 0 && !panelManaged && ai.complete === undefined) {
     throw new CmsConfigError(
       "ai.auth",
-      "AI is configured without credentials; remove the section to disable it",
+      "AI is configured without credentials. Add ai.auth, set ai.storage.secret to manage keys in the panel, or remove the section to disable AI",
     );
   }
   // A model whose provider has no credentials would fail on the first click
   // in the panel, which is the worst possible moment to learn about it.
-  const configured = new Set(Object.keys(ai.auth));
-  if (!configured.has(ai.defaultModel.provider)) {
+  if (
+    !panelManaged &&
+    ai.complete === undefined &&
+    !configured.has(ai.defaultModel.provider)
+  ) {
     throw new CmsConfigError(
       "ai.defaultModel.provider",
       `"${ai.defaultModel.provider}" has no entry in ai.auth`,
     );
   }
-  const chatProvider = ai.chat?.model?.provider;
-  if (chatProvider && !configured.has(chatProvider)) {
+  const assistant = ai.assistant;
+  const assistantProvider = assistant?.model?.provider;
+  if (
+    assistantProvider &&
+    !panelManaged &&
+    ai.complete === undefined &&
+    !configured.has(assistantProvider)
+  ) {
     throw new CmsConfigError(
-      "ai.chat.model.provider",
-      `"${chatProvider}" has no entry in ai.auth`,
+      "ai.assistant.model.provider",
+      `"${assistantProvider}" has no entry in ai.auth`,
+    );
+  }
+  for (const [key, min] of [
+    ["maxTurns", 1],
+    ["maxToolCalls", 1],
+    ["timeoutMs", 1_000],
+  ] as const) {
+    const value = assistant?.[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value < min) {
+      throw new CmsConfigError(
+        `ai.assistant.${key}`,
+        `must be an integer of at least ${min}; it is a budget the server enforces, not a hint to the model`,
+      );
+    }
+  }
+  if (ai.storage && ai.storage.secret.length < 16) {
+    throw new CmsConfigError(
+      "ai.storage.secret",
+      "must be at least 16 characters; it encrypts the provider keys in the database",
     );
   }
 }
@@ -510,6 +1171,33 @@ function validateWebhooks(
 }
 
 /**
+ * Where the panel lives, relative to `basePath`.
+ *
+ * Checked here rather than when the router is built, for the same reason the
+ * collection slugs are: a configuration mistake should fail while the module
+ * is loading, not on somebody's first request.
+ */
+function normaliseAdminPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/")) {
+    throw new CmsConfigError("admin.path", 'must start with "/"');
+  }
+  if (/[?#]/.test(trimmed) || trimmed.includes("//")) {
+    throw new CmsConfigError(
+      "admin.path",
+      "cannot contain a query, a fragment or an empty segment",
+    );
+  }
+  const normalised = trimTrailingSlashes(trimmed);
+  if (normalised.length === 0) {
+    // The panel at the mount root is legal: `/admin/*` becomes `/*`, which is
+    // matched last, so every API route still wins.
+    return "";
+  }
+  return normalised;
+}
+
+/**
  * The mount point is stripped from incoming requests, so it has to be a plain
  * absolute path. Same rule as every other Heyo package.
  */
@@ -524,7 +1212,7 @@ function normaliseBasePath(value: string): string {
   if (trimmed.includes("//")) {
     throw new CmsConfigError("basePath", "cannot contain empty segments");
   }
-  const normalised = trimmed.replace(/\/+$/, "");
+  const normalised = trimTrailingSlashes(trimmed);
   if (normalised.length === 0) {
     throw new CmsConfigError("basePath", 'cannot be "/"');
   }
@@ -553,51 +1241,58 @@ function inspectCollections(config: ResolvedCmsConfig): CollectionInspection[] {
 }
 
 /**
- * The order hooks will actually run in.
+ * What happens to a file, printed.
  *
- * Plugin hooks first, by priority, then the configuration's own — so a
- * developer can always have the last word over a plugin they installed
- * (section 5). Printing it is the difference between a pipeline and a
- * mystery.
+ * The adapter is not built here: resolving it would open a connection, or
+ * read an environment variable that only exists inside a request, every time
+ * somebody asked what this CMS does.
  */
-function hookPipeline(config: ResolvedCmsConfig): HookPipelineEntry[] {
-  const entries: HookPipelineEntry[] = [];
+function inspectStorage(config: ResolvedCmsConfig): StorageInspection | null {
+  const uploads = config.uploads;
+  if (!uploads) return null;
+  const retention = uploads.retention?.purgeAfter ?? "30d";
+  return {
+    id:
+      typeof uploads.storage === "function" ? "unresolved" : uploads.storage.id,
+    variants: uploads.images?.variants?.mode ?? null,
+    processor: uploads.images?.processor?.id ?? null,
+    purgeAfter: retention === false ? null : retention,
+  };
+}
 
-  for (const plugin of config.plugins) {
-    for (const hook of plugin.hooks ?? []) {
-      entries.push({
-        collection: hook.collection,
-        operation: hook.operation,
-        timing: hook.timing,
-        source: plugin.id,
-        priority: hook.priority ?? 0,
-      });
-    }
-  }
+/**
+ * What each plugin actually contributed.
+ *
+ * Counted from the resolved configuration rather than from the plugin
+ * object, so a plugin whose `extendCollections` returned nothing shows zero
+ * hooks — which is the state somebody is trying to diagnose when they print
+ * this.
+ */
+function inspectPlugins(config: ResolvedCmsConfig): PluginInspection[] {
+  return config.plugins.map((plugin) => ({
+    id: plugin.id,
+    collections: Object.keys(plugin.schema?.collections ?? {}).sort(),
+    tables: (plugin.schema?.tables ?? []).map((table) => table.name).sort(),
+    routes: plugin.routes?.length ?? 0,
+    hooks:
+      (plugin.hooks?.length ?? 0) +
+      config.pluginHooks.filter((entry) => entry.plugin === plugin.id).length,
+    migrations: (plugin.migrations ?? []).map((migration) => migration.id),
+    client: plugin.client !== undefined,
+    admin: plugin.admin !== undefined,
+  }));
+}
 
-  for (const [collection, hooks] of Object.entries(
-    config.databaseHooks ?? {},
-  )) {
-    for (const operation of ["create", "update", "delete"] as const) {
-      const definition = hooks?.[operation];
-      if (!definition) continue;
-      if (definition.before) {
-        entries.push({ collection, operation, timing: "before", source: "config", priority: 100 }); // prettier-ignore
-      }
-      if (definition.after) {
-        entries.push({ collection, operation, timing: "after", source: "config", priority: 100 }); // prettier-ignore
-      }
-    }
-  }
-
-  return entries.sort(
-    (a, b) =>
-      a.collection.localeCompare(b.collection) ||
-      a.operation.localeCompare(b.operation) ||
-      a.timing.localeCompare(b.timing) ||
-      a.priority - b.priority ||
-      a.source.localeCompare(b.source),
-  );
+function inspectAuth(config: ResolvedCmsConfig): AuthInspection {
+  const auth = config.admin.auth;
+  return {
+    methods: auth?.methods ?? [],
+    twoFactor: auth?.twoFactor === true,
+    apiKeys: auth?.apiKeys?.enabled === true,
+    sso: auth?.sso?.issuer ?? null,
+    roles: Object.keys(config.rbac?.roles ?? {}).sort(),
+    customRoles: config.rbac?.customRoles === true,
+  };
 }
 
 function titleCase(value: string): string {

@@ -1,0 +1,2 @@
+import { s3 } from "@heyo-sh/heyo-cms/uploads";
+import type { StorageConfig } from "@heyo-sh/heyo-cms/types";

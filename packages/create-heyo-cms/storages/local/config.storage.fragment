@@ -1,0 +1,13 @@
+/**
+ * Files on this machine's disk.
+ *
+ * Right for development and for a server you own; wrong for anything
+ * serverless, where the filesystem is per-invocation and disappears with it.
+ * Switch to `s3()` or `r2()` before deploying to Vercel or Workers — the rest
+ * of the configuration does not change, because `StorageAdapter` is the same
+ * five methods either way.
+ */
+const storage: StorageConfig = local({
+  directory: process.env.MEDIA_DIR ?? "./media",
+  baseUrl: "/media",
+});

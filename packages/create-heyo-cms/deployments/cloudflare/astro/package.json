@@ -1,0 +1,12 @@
+{
+  "scripts": {
+    "deploy": "astro build && wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "14.3.3"
+  },
+  "devDependencies": {
+    "wrangler": "4.147.0"
+  }
+}

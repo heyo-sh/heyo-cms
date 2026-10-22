@@ -26,13 +26,21 @@ bun run build
 The workspace contains:
 
 - `packages/heyo-cms` — contracts, fields, schema, database adapters, CLI.
-- `packages/heyo-cms-admin` — the admin panel (stage 8).
-- `packages/create-heyo-cms` — project generator and templates (stage 10).
-- `examples/*` — runnable examples, driven by `bun run example`.
+- `packages/heyo-cms-admin` — the bundled admin panel.
+- `packages/create-heyo-cms` — generator, templates and initial migrations.
+- `examples/next` — the comprehensive configuration example.
+- `website` — a heyo-docs site for `docs/`; run `bun run docs:dev`.
 
-`bun run example smoke` boots the examples against a real database. It is the
-canonical way to check a change in the schema layer, the adapters or the
-handler, and it enters `quality` with the HTTP handler in stage 7.
+`bun run example smoke` generates six ignored framework/platform projects
+under `examples/`, installs local release tarballs, then checks real framework
+dev servers against a database. `bun run example build` separately checks
+production bundles. Both also run in CI; they are separate from `quality`.
+Generated examples are not workspaces and do not change the root lockfile.
+Move them aside before testing template changes so they are regenerated.
+
+After changing template configuration, run `bun run templates` and review the
+migration diff. `bun run templates --check` detects drift; generated migration
+bytes must not be hand-formatted. Build the docs with `bun run docs:build`.
 
 ## What a change to each layer needs
 

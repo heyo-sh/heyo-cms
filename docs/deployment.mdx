@@ -1,0 +1,105 @@
+---
+title: Deployment
+description: Vercel and Cloudflare Workers, the cron, and the three things to do before the first deploy.
+---
+
+# Deployment
+
+The CMS is one handler, so deploying it is deploying your application. What
+differs between platforms is the database binding, whether a codec exists, and
+who owns the clock.
+
+## Before the first deploy
+
+1. **Set the environment variables** from `.env.example`. The generated
+   configuration does not connect to a database during a build.
+2. **Apply the migration** against the production database:
+   ```bash
+   DATABASE_URL=… heyo-cms migrate
+   ```
+   Deployments do not migrate themselves. A schema change that applied itself
+   during a build is one nobody reviewed, and on a rollback it is a schema the
+   previous version does not understand.
+3. **Create an administrator**, once. Opening the deployed panel is enough:
+   with no accounts it asks for the first one and closes that form behind it.
+   On a deployment where the first visitor is not necessarily you — a public
+   URL announced before anyone has claimed it — do it from a shell first, or
+   set `admin.auth.firstUser: false` and only ever do it from a shell:
+   ```bash
+   DATABASE_URL=… heyo-cms create-admin --email you@example.com
+   ```
+
+## Vercel
+
+`vercel.json` calls `/api/cron` every fifteen minutes with `CRON_SECRET` as a
+bearer token. That is what applies scheduled changes, empties the expired
+trash and collects unused files. Without it the CMS still works — nothing is
+lost — but a change scheduled for Friday will not happen on Friday.
+
+The filesystem does not survive the invocation that wrote to it, so `local()`
+storage is for development only. Generate with `--storage s3` or `--storage
+r2`.
+
+Node is available, so the `images` block in `heyo-cms.config.ts` ships
+`sharpImages()` and the named variants are rendered in the function.
+
+## Cloudflare Workers
+
+- **D1** is a binding in `wrangler.json`, injected by the runtime. The
+  generated `database` factory in `heyo-cms.config.ts` reads it from
+  `cloudflare:workers`, and falls back to the SQLite file Wrangler keeps under
+  `.wrangler/state` when it is running outside a Worker — which is how
+  `heyo-cms generate`, `seed` and `import` work on your machine.
+- **R2** is the same story: a binding inside the Worker, the S3-compatible API
+  from the CLI.
+- **Images** have no codec in a Worker, so the template ships
+  `variants.mode: "on-demand"` without a processor and the size travels in the
+  URL for an image CDN. EXIF is still stripped — the engine does that itself.
+- **The sweeps** run from `wrangler.json`'s cron trigger where the template
+  owns the Worker entry (React Router). The Next.js and Astro adapters
+  generate their own entry, so point any scheduler at `/api/cron`, or call
+  `POST /api/heyo-cms/jobs/run` with an API key holding `jobs:run`.
+
+```bash
+wrangler d1 create my-cms          # paste database_id into wrangler.json
+bun run db:migrate                 # the local D1 under .wrangler/
+bun run db:migrate:remote          # the deployed one
+wrangler secret put CRON_SECRET
+```
+
+### Production D1 administration
+
+After remote migrations, set `CLOUDFLARE_ACCOUNT_ID`,
+`CLOUDFLARE_D1_DATABASE_ID` and `CLOUDFLARE_API_TOKEN` (D1 Edit permission)
+in your shell, then explicitly select the remote database:
+
+```bash
+HEYO_D1_REMOTE=1 bunx heyo-cms create-admin --email you@example.com
+HEYO_D1_REMOTE=1 bun run seed
+```
+
+Without `HEYO_D1_REMOTE=1`, CLI commands use local D1. Content export/import
+does **not** transfer administrator accounts. Never commit the API token.
+
+### Optional Node features on Workers
+
+Cloudflare templates alias `sharp` and the default AI provider runtime to an
+explicit unsupported-feature error. Use an image CDN; for AI supply
+`ai.complete` with a Worker-compatible transport. Node deployments keep the
+optional peer dependencies external instead.
+
+## Anywhere else
+
+`cms.handler` is `Request → Response`, so a Node, Bun or Deno server is a
+`serve()` call around it. A long-lived process owns a clock, so it does not
+need a cron endpoint:
+
+```ts
+import { startJobRunner } from "@heyo-sh/heyo-cms/jobs";
+
+const jobs = startJobRunner({ cms, interval: "1m" });
+process.on("SIGTERM", () => void jobs.stop());
+```
+
+The runner never overlaps itself and unrefs its timer, so it cannot be the
+reason a process refuses to exit.

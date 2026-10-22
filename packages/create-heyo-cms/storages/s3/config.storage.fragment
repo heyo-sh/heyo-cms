@@ -1,0 +1,17 @@
+/**
+ * S3, or anything that speaks it: MinIO, Tigris, Wasabi, Ceph.
+ *
+ * Credentials are read from the environment when they are not named here,
+ * which is what lets an IAM role or a `~/.aws` profile work without a secret
+ * in a file that is checked in.
+ */
+const storage: StorageConfig = s3({
+  bucket: process.env.S3_BUCKET ?? "",
+  region: process.env.S3_REGION ?? "eu-central-1",
+  // Set for an S3-compatible service; leave unset for AWS itself.
+  ...(process.env.S3_ENDPOINT ? { endpoint: process.env.S3_ENDPOINT } : {}),
+  // Serve from a CDN while writing straight to the bucket.
+  ...(process.env.S3_PUBLIC_URL
+    ? { publicUrl: process.env.S3_PUBLIC_URL }
+    : {}),
+});

@@ -1,0 +1,19 @@
+/**
+ * MongoDB.
+ *
+ * The same engine-neutral query AST the SQL adapters receive is translated
+ * into find/aggregate here, so nothing in your configuration changes if you
+ * move. Two things do differ, and the adapter says so rather than hiding it:
+ * transactions need a replica set (Atlas has one; a single local `mongod`
+ * does not), and a migration is a list of indexes and backfills in a `.json`
+ * file instead of a `.sql`.
+ */
+const database: DatabaseAdapterFactory = () => {
+  const url = process.env.MONGODB_URL;
+  if (!url) {
+    throw new Error(
+      "MONGODB_URL is not set. Copy .env.example to .env and point it at a MongoDB.",
+    );
+  }
+  return (mongodb(url) as DatabaseAdapterFactory)();
+};

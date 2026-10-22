@@ -285,7 +285,7 @@ export function multiselect<const TOptions extends MultiselectOptions>(
 }
 
 // ---------------------------------------------------------------------------
-// json, media, relation, slug
+// json, media, relation
 // ---------------------------------------------------------------------------
 
 export interface JsonFieldOptions extends FieldOptions {
@@ -358,34 +358,27 @@ export function relation<const TOptions extends RelationOptions>(
   } as TOptions) as unknown as FieldDefinition<FieldValue<string, TOptions>>;
 }
 
-export interface SlugOptions extends FieldOptions {
-  /** Field the slug is generated from when it is left empty. */
-  from?: string;
-  default?: string;
-}
-
-/** A URL segment: unique and indexed unless the configuration says otherwise. */
-export const slug = defineField<string, SlugOptions>({
-  name: "slug",
-  optionsSchema: commonOptions.extend({
-    from: z.string().optional(),
-    default: z.string().optional(),
-  }) as unknown as z.ZodType<SlugOptions>,
-  schema: () =>
-    z
-      .string()
-      .min(1)
-      .regex(
-        /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
-        "must be lowercase words separated by single hyphens",
-      ),
-  column: (options) => ({
-    type: "text",
-    unique: options.unique ?? true,
-    index: true,
-  }),
-});
-
+/**
+ * There is no `slug` type, and that is deliberate.
+ *
+ * It was one of these for a while, and it earned its keep by being `text`
+ * with `unique`, `index` and a hyphen pattern already set — plus a `from`
+ * option that promised the value would be derived from another field and
+ * never did it, because nothing in the engine generates one field out of
+ * another. A type whose only feature is a default and a promise is a type
+ * that teaches the wrong thing. A URL handle is a `text` field:
+ *
+ * ```ts
+ * handle: text({
+ *   unique: true,
+ *   index: true,
+ *   pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+ * })
+ * ```
+ *
+ * and generating it from the title is a `create.before` hook, which runs
+ * before validation precisely so that it can fill a required field.
+ */
 export const email = defineField<string, TextOptions>({
   name: "email",
   optionsSchema: commonOptions as unknown as z.ZodType<TextOptions>,
@@ -422,24 +415,18 @@ export function seoFields(): {
       label: "SEO title",
       localized: true,
       maxLength: 70,
-      ai: {
-        generate: {
-          label: "Suggest an SEO title",
-          prompt: "Write a search-friendly title under 60 characters.",
-          context: ["title", "body"],
-        },
+      aiGenerate: {
+        label: "Suggest an SEO title",
+        prompt: "Write a search-friendly title under 60 characters.",
       },
     }),
     seoDescription: textarea({
       label: "SEO description",
       localized: true,
       maxLength: 160,
-      ai: {
-        generate: {
-          label: "Suggest an SEO description",
-          prompt: "Summarise the article in one sentence under 155 characters.",
-          context: ["title", "body"],
-        },
+      aiGenerate: {
+        label: "Suggest an SEO description",
+        prompt: "Summarise the article in one sentence under 155 characters.",
       },
     }),
     ogImage: media({ label: "Social image", accept: "image/*" }),

@@ -6,5 +6,13 @@ coverage/
 **/.next/
 **/.react-router/
 **/migrations/*.sql
+# Generated migration bytes are checksummed and compared by templates --check.
+packages/create-heyo-cms/databases/*/migrations/
+# These TypeScript templates contain generator slots that are intentionally
+# not valid TypeScript until scaffolded.
+packages/create-heyo-cms/templates/*/heyo-cms.config.ts
 bun.lock
 **/*.svg
+
+# Vendored unchanged from the Hairline skill, so its bytes stay comparable.
+packages/heyo-cms-admin/src/app/art/hairline-kernel.js

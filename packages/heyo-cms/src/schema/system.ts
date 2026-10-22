@@ -101,11 +101,15 @@ function table(
 export function systemTables(): TableSnapshot[] {
   return [
     documentsTable(),
-    localesTable(),
     cmsUsersTable(),
     cmsSessionsTable(),
+    cmsAccountsTable(),
+    cmsTokensTable(),
     cmsApiKeysTable(),
     cmsRolesTable(),
+    cmsAiCredentialsTable(),
+    cmsAiMutationsTable(),
+    cmsAiPlansTable(),
     mediaTable(),
     mediaUsagesTable(),
     webhooksTable(),
@@ -128,6 +132,13 @@ function documentsTable(): TableSnapshot {
       id(),
       column("collection", "text", { nullable: false }),
       column("data", "json", { nullable: false }),
+      // The optimistic-concurrency token. Every write that changes the row
+      // increments it, and a caller that read the document first may pass it
+      // back as a precondition: without it "read, think, write" silently
+      // overwrites whoever else wrote in between — which the AI assistant
+      // would do routinely, because minutes pass between its read and its
+      // save.
+      column("revision", "integer", { nullable: false, default: 1 }),
       // A scheduled change is a patch plus a time, not a second copy of the
       // document: it works for a status flip and for any other field, and it
       // is applied as an ordinary update so hooks and events still run.
@@ -150,21 +161,6 @@ function documentsTable(): TableSnapshot {
   );
 }
 
-function localesTable(): TableSnapshot {
-  return {
-    ...table("locales", [
-      column("code", "text", { nullable: false }),
-      column("name", "text", { nullable: false }),
-      column("rtl", "boolean", { nullable: false, default: false }),
-      column("sort_order", "integer", { nullable: false, default: 0 }),
-      createdAt(),
-    ]),
-    // Locales are identified by their code, which is already unique and
-    // already what every request sends.
-    primaryKey: ["code"],
-  };
-}
-
 function cmsUsersTable(): TableSnapshot {
   return table(
     "cms_users",
@@ -174,6 +170,10 @@ function cmsUsersTable(): TableSnapshot {
       column("name", "text"),
       column("password_hash", "text"),
       column("two_factor_secret", "text"),
+      // A secret exists from the moment setup starts; this is what says the
+      // user finished it. Without the distinction a half-configured
+      // authenticator would lock its owner out of their own account.
+      column("two_factor_enabled", "boolean", { default: false }),
       column("status", "text", { nullable: false, default: "active" }),
       column("roles", "json", { nullable: false, array: true }),
       column("avatar_url", "text"),
@@ -207,6 +207,74 @@ function cmsSessionsTable(): TableSnapshot {
       index("cms_sessions", ["token_hash"], { unique: true }),
       index("cms_sessions", ["user_id"]),
       index("cms_sessions", ["expires_at"]),
+    ],
+  );
+}
+
+/**
+ * External identities, one row per provider account.
+ *
+ * Separate from `cms_users` because a single editor legitimately signs in
+ * through GitHub at home and through the company's OIDC at work, and because
+ * a provider id is the only stable join key — an email address changes.
+ */
+function cmsAccountsTable(): TableSnapshot {
+  return table(
+    "cms_accounts",
+    [
+      id(),
+      column("user_id", "text", {
+        nullable: false,
+        references: { table: "cms_users", column: "id", onDelete: "cascade" },
+      }),
+      column("provider", "text", { nullable: false }),
+      column("provider_account_id", "text", { nullable: false }),
+      column("email", "text"),
+      createdAt(),
+      updatedAt(),
+    ],
+    [
+      index("cms_accounts", ["provider", "provider_account_id"], {
+        unique: true,
+        name: "uniq_cms_accounts_provider_account",
+      }),
+      index("cms_accounts", ["user_id"]),
+    ],
+  );
+}
+
+/**
+ * Every single-use secret: invitations, magic links, password resets, the
+ * two-factor challenge between a password and a session, and the OAuth state.
+ *
+ * One table rather than five because they differ only in `type` and in how
+ * long they live, and because "is this token still valid" has to be one query
+ * with one set of rules. Only the hash is stored, for the same reason sessions
+ * store only a hash.
+ */
+function cmsTokensTable(): TableSnapshot {
+  return table(
+    "cms_tokens",
+    [
+      id(),
+      column("type", "text", { nullable: false }),
+      column("user_id", "text", {
+        references: { table: "cms_users", column: "id", onDelete: "cascade" },
+      }),
+      column("email", "text"),
+      column("token_hash", "text", { nullable: false, unique: true }),
+      /** PKCE verifier, the provider being used, where to go afterwards. */
+      column("data", "json"),
+      column("expires_at", "timestamp", { nullable: false }),
+      // Consumption is a column rather than a delete: a token that was used
+      // once and is presented again should read as spent, not as unknown.
+      column("consumed_at", "timestamp"),
+      createdAt(),
+    ],
+    [
+      index("cms_tokens", ["token_hash"], { unique: true }),
+      index("cms_tokens", ["user_id"]),
+      index("cms_tokens", ["type", "expires_at"]),
     ],
   );
 }
@@ -248,6 +316,89 @@ function cmsRolesTable(): TableSnapshot {
       updatedAt(),
     ],
     [index("cms_roles", ["name"], { unique: true })],
+  );
+}
+
+/**
+ * Provider keys configured in the panel rather than in the environment.
+ *
+ * The token is encrypted with `ai.storage.secret` before it gets here, so a
+ * copy of this table is not a copy of the keys (section 8). `hint` is the
+ * last four characters, which is what a settings screen needs to show that a
+ * key is the one somebody meant.
+ */
+function cmsAiCredentialsTable(): TableSnapshot {
+  return table(
+    "cms_ai_credentials",
+    [
+      id(),
+      column("provider", "text", { nullable: false, unique: true }),
+      column("auth_type", "text", { nullable: false, default: "api-key" }),
+      column("secret", "text", { nullable: false }),
+      column("hint", "text"),
+      createdAt(),
+      updatedAt(),
+    ],
+    [index("cms_ai_credentials", ["provider"], { unique: true })],
+  );
+}
+
+/**
+ * What the assistant has already written, keyed by run and tool call.
+ *
+ * A dropped SSE connection is not an unusual event; a client that retries a
+ * mutation after one is the normal client. The key is written inside the same
+ * transaction as the document it describes, so a replay answers with the
+ * first result rather than running the hooks and the outbox a second time —
+ * which is the difference between "idempotent" and "usually idempotent".
+ */
+function cmsAiMutationsTable(): TableSnapshot {
+  return table(
+    "cms_ai_mutations",
+    [
+      id(),
+      column("idempotency_key", "text", { nullable: false, unique: true }),
+      column("run_id", "text", { nullable: false }),
+      column("collection", "text"),
+      column("document_id", "text"),
+      column("result", "json"),
+      createdAt(),
+    ],
+    [
+      index("cms_ai_mutations", ["idempotency_key"], { unique: true }),
+      index("cms_ai_mutations", ["run_id"]),
+    ],
+  );
+}
+
+/**
+ * A mutation the assistant proposed and a human has not approved yet.
+ *
+ * Stored rather than kept in the model's context on purpose: approving a plan
+ * must execute exactly what was shown on screen, so the plan is normalised,
+ * written down, and replayed from the row — never handed back to the model to
+ * reconstruct (section "Zapis, konflikty i zatwierdzanie").
+ */
+function cmsAiPlansTable(): TableSnapshot {
+  return table(
+    "cms_ai_plans",
+    [
+      id(),
+      column("run_id", "text", { nullable: false }),
+      column("actor_id", "text"),
+      column("kind", "text", { nullable: false }),
+      column("summary", "text", { nullable: false }),
+      column("operations", "json", { nullable: false }),
+      column("status", "text", { nullable: false, default: "pending" }),
+      column("result", "json"),
+      column("expires_at", "timestamp", { nullable: false }),
+      column("approved_at", "timestamp"),
+      createdAt(),
+    ],
+    [
+      index("cms_ai_plans", ["run_id"]),
+      index("cms_ai_plans", ["status", "expires_at"]),
+    ],
   );
 }
 
@@ -401,6 +552,10 @@ function activityTable(): TableSnapshot {
       column("actor_id", "text"),
       column("actor_source", "text"),
       column("action", "text", { nullable: false }),
+      // Where the write came from: `admin`, `rest`, `job`, `ai`. An audit
+      // trail that cannot distinguish a form save from an agent save cannot
+      // answer the first question anybody asks about an agent save.
+      column("source", "text"),
       column("collection", "text"),
       column("document_id", "text"),
       column("locale", "text"),

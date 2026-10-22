@@ -1,0 +1,6 @@
+{
+  "scripts": {
+    "db:migrate": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+  }
+}

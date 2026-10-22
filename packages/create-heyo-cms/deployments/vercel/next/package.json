@@ -1,0 +1,11 @@
+{
+  "scripts": {
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "vercel": "62.2.0"
+  }
+}

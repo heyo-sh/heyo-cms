@@ -1,0 +1,126 @@
+---
+title: Caching
+description: The generated project caches its post views and empties them on save — one file of tags, three hooks, no webhook to point at yourself.
+---
+
+# Caching
+
+A generated project ships with the two views every CMS site has — a list of
+posts and one post — already cached, and already emptied the moment somebody
+presses save. There is nothing to turn on and no webhook to point back at
+your own deployment.
+
+It is deliberately small: two files you can read in a minute and change
+without asking anybody's permission.
+
+| File                                    | What it decides                                                                           |
+| --------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `heyo-cms.cache.ts`                     | the tag names, how a view declares itself cacheable, and what a purge is on this platform |
+| `databaseHooks` in `heyo-cms.config.ts` | that a write to `posts` purges those tags                                                 |
+
+## The tags
+
+Two, because there are two shapes of staleness:
+
+```ts
+postsTag; // "posts"        — every list
+postTag("hello-world"); // "posts:hello-world" — one page
+```
+
+A write purges both. Publishing a correction to one post must not throw away
+every other post page a cache is holding, and adding a post must still change
+the list it does not belong to yet.
+
+## The view declares, the write purges
+
+On Next.js the framework has a cache, so a view uses it:
+
+```ts
+const readPublishedPosts = unstable_cache(
+  async () => (await cms.api.posts.find({ limit: 10 })).docs,
+  ["posts", "published"],
+  { tags: [postsTag], revalidate: 3600 },
+);
+```
+
+On Astro and React Router there is no framework cache, so the view says what
+the CDN may hold and for how long:
+
+```ts
+await cachePage(Astro.response.headers, [postTag(handle)]);
+```
+
+Either way the other half is the same three hooks, at the bottom of
+`heyo-cms.config.ts`:
+
+```ts
+databaseHooks: {
+  posts: {
+    create: { after: (doc) => revalidatePosts(postTags(doc)) },
+    update: {
+      after: ({ doc, previous }) =>
+        revalidatePosts([...postTags(doc), ...postTags(previous)]),
+    },
+    delete: { after: (doc) => revalidatePosts(postTags(doc)) },
+  },
+}
+```
+
+Because that is a database hook rather than an HTTP one, it fires for every
+write the CMS performs: the panel, `cms.api`, an API key, an import, and a
+scheduled publication applied by the cron at three in the morning. All five
+go through the one write path.
+
+Both sides of an update are purged. Renaming a post from `/posts/old` to
+`/posts/new` has to empty both URLs, and only `previous` knows the first one.
+
+## What each platform does
+
+`heyo-cms.cache.ts` is the file the deployment layer replaces, and the only
+one. Neither the views nor the configuration change by a character between
+these four.
+
+| Template       | Vercel                                             | Cloudflare                                                                                                         |
+| -------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Next.js        | `revalidateTag` — the framework's data cache       | the same call; `open-next.config.ts` gives that cache a KV namespace to live in and a Durable Object to track tags |
+| Astro          | `addCacheTag` / `invalidateByTag` on the CDN       | `Cache-Tag` headers, the Workers Cache API, and a purge by tag                                                     |
+| React Router   | the same two calls                                 | the same three                                                                                                     |
+| Neither (Node) | headers only: correct, and nothing is holding them | —                                                                                                                  |
+
+## Why an `after` hook rather than an event
+
+`cms.on("document.updated")` would be the obvious place and is the wrong one.
+Events are delivered from the outbox after the response has been sent, and on
+serverless the process is frozen by then: the purge would happen on some
+later request, or never. A database hook runs inside the write, which costs a
+purge that is occasionally a moment early — a cache that refills with the
+old value microseconds before the commit — and buys one that always happens.
+
+If your site is deployed separately from the CMS, that trade changes and a
+webhook subscription to `document.*` is the right mechanism. The hook is the
+default because one deployment is the common case.
+
+## Time-to-live is a floor, not a schedule
+
+Every view also carries an hour. That is not how fresh the site is — a purge
+makes an edit visible in seconds — it is what happens when a purge never
+arrives: a post written by `heyo-cms import` on a laptop, a Cloudflare purge
+token nobody set, a plan without tag purging. Caching for a year and trusting
+the purge is how a typo outlives the person who made it.
+
+## Nothing private is ever cached
+
+On Cloudflare the Worker stores a response only when the view tagged it, and
+never when it carries a `Set-Cookie`. That keeps the API, the panel and every
+signed-in page out of a shared cache by construction, rather than by a path
+list somebody has to remember to update.
+
+The CMS's own routes are not cached at all, in any deployment. A read through
+`/api/heyo-cms` is access-controlled per caller, and a shared cache in front
+of it would be a way to serve one person's documents to another.
+
+## Caching something else
+
+Three steps, and nothing hidden: add a tag to `heyo-cms.cache.ts`, use it in
+the view, and add the collection to `databaseHooks`. A `pages` collection
+with a `/pages/<handle>` view is the same file twice.

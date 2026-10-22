@@ -1,0 +1,81 @@
+---
+title: Migrating from Payload
+description: What maps directly, what is deliberately different, and how to move the content.
+---
+
+# Migrating from Payload
+
+## What maps directly
+
+| Payload                              | Heyo CMS                                               |
+| ------------------------------------ | ------------------------------------------------------ |
+| `collections: [{ slug, fields }]`    | `collections: { posts: defineCollection({ fields }) }` |
+| `globals`                            | `globals`, on the same machinery                       |
+| `payload.find/create/update/delete`  | `cms.api.posts.find/create/update/delete`              |
+| `hooks.beforeChange` / `afterChange` | `databaseHooks.posts.create.before` / `.after`         |
+| `access: { read: () => Where }`      | the same, and the filter goes into the query           |
+| field-level `access`                 | the same, `read` and `update`                          |
+| `upload: true` collections           | `uploads` and the `media()` field type                 |
+| `localization`                       | `i18n`, a list of locale codes                         |
+| REST under `/api`                    | one catch-all under `basePath`                         |
+
+## What is deliberately different
+
+**No drafts and no versions.** Status is an ordinary `select()` field and the
+engine attaches no meaning to it; who may publish is who may write that field.
+Version history, diffing, restore and approval workflows are a separate paid
+package built on events and the plugin contract — not a core concern.
+
+**No `push` mode, ever.** `heyo-cms generate` writes a migration file you read
+before it runs. This is the most common complaint about running Payload on
+Postgres, and it is answered by not having the feature.
+
+**No `depth` joins.** Relations are resolved with a batch loader: collect the
+ids at one level, one query per target collection, recurse. The query count
+depends on the schema rather than on the number of documents, which is the
+N+1 problem gone by construction.
+
+**The panel is a bundle served by the handler**, not a Next.js app you host.
+There is no second deployment, no CORS and no `admin` build step.
+
+**AI is per field**, not a global task list, and never writes anything by
+itself.
+
+## Moving the content
+
+There is no importer for Payload's database layout, because there is no single
+Payload database layout — it depends on your adapter, your `depth` settings
+and your version history. What there is, is a documented file format:
+
+```
+{"kind":"header","format":"heyo-cms/export","version":1,"exportedAt":"2026-10-03T00:00:00Z","database":"external","defaultLocale":"en","collections":["posts"],"globals":["settings"]}
+{"kind":"document","collection":"posts","id":"doc_1","data":{"title":{"en":"Hello"}},"createdAt":null,"updatedAt":null}
+{"kind":"global","global":"settings","data":{"siteName":"Example"},"updatedAt":null}
+```
+
+Write one record per document from your Payload instance — `data` is the
+storage shape, so a localized field is `{ en: …, pl: … }` — and feed the file
+to:
+
+```bash
+heyo-cms import content.ndjson
+```
+
+Every record goes through `cms.api`, so your hooks, validation and access
+rules run on the way in, using the system actor. IDs are preserved for content
+relations. Upload media separately and rewrite media IDs/URLs; media bytes,
+media-library rows, accounts and history are not part of this format. Register
+every destination locale in `i18n.locales` before importing. Use a staging
+database first.
+
+Rich text is the one field that needs conversion: Payload's Lexical and Slate
+documents are not ProseMirror. `richTextFromMarkdown()` is the cheapest
+bridge if you can render your old content to Markdown; a per-node converter is
+the faithful one.
+
+## What to check afterwards
+
+```bash
+heyo-cms status     # the schema the configuration implies is applied
+heyo-cms export --out roundtrip.ndjson   # and the content reads back out
+```

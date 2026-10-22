@@ -1,0 +1,250 @@
+---
+title: AI
+description: One action on one field, and one assistant across the panel. Never a silent write, always accounted for.
+---
+
+# AI
+
+Two features, deliberately separate, with one `ai` section between them.
+
+A **field action** is one prompt about one field that produces a value a human
+approves. It is a capability of the field that declares it, and nothing writes.
+
+The **assistant** is a panel-wide agent with tools. It reads and writes through
+the ordinary API, with the signed-in actor's permissions, and it is the thing
+to reach for when a request spans records, collections or languages.
+
+The only global switch for either is the absence of the `ai` section.
+
+```ts
+ai: {
+  auth: { openai: { type: "api-key", token: process.env.OPENAI_API_KEY! } },
+  defaultModel: { provider: "openai", model: "gpt-4o-mini" },
+  storage: { secret: process.env.AI_KEY_SECRET! },   // lets the panel manage keys
+
+  assistant: {
+    enabled: true,
+    model: { provider: "openai", model: "gpt-4o-mini" },  // defaults to defaultModel
+    instructions: "Write in Polish. Always read a record before changing it.",
+    maxTurns: 8,
+    maxToolCalls: 16,
+    timeoutMs: 90_000,
+  },
+}
+```
+
+## Field actions
+
+`aiGenerate` enables a **Generate** action for one textual field (text,
+textarea, richText, email or url). It accepts `label`, `prompt`, `context`,
+`model` and `maxLength`:
+
+```ts
+slug: text({
+  pattern: "^[a-z0-9-]+$",
+  generate: ({ fields }) => slugify(String(fields.title ?? "")),
+  aiGenerate: {
+    label: "Suggest a slug",
+    prompt: "Write a lowercase, hyphenated URL slug from the title.",
+    context: ["title"],
+    maxLength: 64,
+  },
+}),
+```
+
+`generate` is a separate deterministic server function: its button immediately
+fills this field from the current readable form values without calling a model.
+It works even when AI is not configured. The Generate and AI buttons appear
+in that order beside the input, at the same size as the sidebar search button.
+
+`context` names **other fields of the same collection**; unknown names,
+self-references and duplicates fail at startup. The actor's field read rules
+filter them at request time. The suggestion goes into the form only after
+confirmation, and the regular field validator checks it on save; AI is not a
+reliable way to guarantee a unique slug. For a deterministic slug use a
+`create.before` hook instead.
+
+The older `ai: { generate: … }` form remains supported for existing projects,
+but cannot be used together with `aiGenerate` on the same field. Other legacy
+field actions such as `translate` still use `ai` for now.
+
+```
+POST /posts/:id/ai/:field/:action     an existing document
+POST /posts/ai/:field/:action         one that has never been saved
+```
+
+- **Nothing is written.** The answer is a value shaped for the field, and
+  storing it is an ordinary save by a human — same hooks, same validation,
+  same access control as typing it.
+- **Only the named context travels.** `context` is per action, and a field the
+  actor may not read is removed before the prompt is built.
+- **Access is checked before a token is spent.** A suggestion for a field the
+  actor cannot write is refused rather than generated.
+- **Every call is accounted for.** `ai.task.completed` carries the action, the
+  field, the model and the token usage; a failure emits `ai.task.failed`.
+
+## The assistant
+
+```
+POST /ai/assistant                      server-sent events
+POST /ai/assistant/plans/:id/approve    applies a stored plan
+```
+
+It needs `@mariozechner/pi-agent-core` alongside `@mariozechner/pi-ai`; both
+are optional peers, imported lazily, so a deployment without AI carries
+neither. Without the agent package the endpoint answers
+`ai_assistant_runtime_missing` by name rather than failing obscurely.
+
+The panel shows a centred composer on every signed-in screen. The first
+message opens a drawer on the right; the page underneath stays live, so the
+editor can navigate and watch the result while the conversation stays put.
+
+### What it can reach
+
+Nothing is configured. The agent calls `describe_cms`, which returns the
+collections, globals and fields **this actor can already see** — a field with a
+read rule they fail is absent from the description entirely, name included.
+Every subsequent read and write is checked again by the engine.
+
+| Group       | Tools                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------ |
+| Orientation | `describe_cms`, `get_current_page`                                                                           |
+| Documents   | `find_documents`, `get_document`, `update_document`, `create_document`, `trash_document`, `restore_document` |
+| Globals     | `get_global`, `update_global`                                                                                |
+| Media       | `find_media`, `get_media`, `update_media`                                                                    |
+| Batches     | `create_mutation_plan`                                                                                       |
+| Audit       | `get_activity`                                                                                               |
+
+There is no SQL tool, no database adapter, no `fetch`, no file read and no
+credential tool. A record that contains "ignore your instructions" is a
+quotation in a tool result, not an escalation: the policy is in the tool layer,
+not in the prompt.
+
+### Where the editor is
+
+"Rewrite this", "translate this page", "change the alt text of this image" —
+all of them are answered by `pageContext`, which the panel sends with every
+message and `get_current_page` reads back:
+
+| Field              | What it means                                                                      |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| `kind`             | `dashboard`, `collection-list`, `document`, `global`, `media`, `trash`, `settings` |
+| `collectionSlug`   | The collection or global in the URL, matched as a **slug**                         |
+| `documentId`       | The record open in the form; absent on a form that has never been saved            |
+| `mediaId`          | The file open in the media library's details pane                                  |
+| `tab`              | The sub-surface in front: a rich-text tab, a settings tab, the media status        |
+| `locale`           | The language the panel is editing                                                  |
+| `dirtyFields`      | Names of unsaved fields. Never their values                                        |
+| `baselineRevision` | The revision the open form was loaded from                                         |
+
+It is a hint, and it is treated as one. Every slug is re-resolved against the
+configuration, document ids are re-read through `cms.api` with the actor from
+the session, and file ids through `cms.media` (media reads are public by
+design). The kind has to agree with what the slug names — a document context
+pointing at a global resolves to nothing rather than to the global. A tab is
+only repeated to the model if it names a real tab or configured rich-text
+field, not arbitrary text from a `?tab=` URL. If a tool argument can name both
+one collection and another's slug, the assistant refuses the ambiguity rather
+than choosing a target to write. Forging a context does not grant access to
+protected records or bypass write checks.
+
+The screens that have nothing more to say register the context from the route
+alone, so a list, the trash and the settings screen still say where they are
+and in which language. On the media library's `orphaned` tab, `find_media`
+searches orphaned files by default, with an explicit status argument to search
+elsewhere. A path the panel answers with "nothing here" says `dashboard`
+rather than naming a collection that does not exist.
+
+### Writing
+
+A single unambiguous change to an existing record is applied immediately —
+"edit this and save it" means exactly that. Everything else waits for a human:
+
+- creating, trashing, restoring, purging;
+- anything touching more than one record;
+- anything needing a permission the actor does not routinely use.
+
+Those tools return a **plan**: a normalised, stored list of operations with an
+expiry. The panel shows how many records and which fields, and `Approve` posts
+to `/ai/assistant/plans/:id/approve`. The server re-checks the session, the
+permissions and the revisions, then replays the stored row. The model is not
+consulted again, so what runs is what was on screen.
+
+### Revisions
+
+Every document carries `revision`, starting at `1` and incremented by each
+write. Pass it back to make a write conditional:
+
+```ts
+await cms.api.posts.update({ id, data, expectedRevision: 17 });
+```
+
+over HTTP as `If-Match: 17` or `revision` in the body. A stale precondition is
+`409 revision_conflict` with both numbers in `details`. The panel sends it on
+every save and shows a conflict rather than overwriting; without it the last
+writer still wins, which remains correct for a script that just wrote the
+document it is patching.
+
+While a document, global or selected file's details form has unsaved changes,
+the assistant refuses to write that record or file and says so. The draft
+itself never leaves the browser — only the field names travel, as
+`pageContext.dirtyFields`.
+
+### Audit
+
+An agent write is an ordinary write: `document.updated`, the hooks, the media
+accounting and an activity row, with the **human** as the actor and
+`source: "ai"`. The activity entry also carries `runId` in `changes`, and
+`GET /activity?source=ai` answers "what did the assistant change". On top of
+that: `ai.agent.completed`, `ai.agent.failed` and `ai.agent.mutation.applied`,
+which carry the run id, the model, the usage, the duration, the tool names and
+the changed field names — and never the prompt, the answer or the record.
+
+The conversation is not stored. It lives in one browser tab and is gone on
+reload.
+
+## Providers and keys
+
+`provider` and `model` are looked up in pi's catalogue; pi is imported lazily,
+so a deployment without AI does not carry a provider catalogue in its bundle.
+`ai.complete` replaces the runtime for field actions — a proxy, a self-hosted
+model, or a test that must not make a network call. It is not a fallback for
+the assistant: a single completion cannot run a tool-call loop, and pretending
+it can would produce an agent that describes writes it never made.
+
+With `ai.storage.secret` set, an administrator can paste a provider key into
+the settings screen. It is encrypted with AES-GCM before storage, never
+answered with (the panel sees the last four characters), and takes precedence
+over `ai.auth`. Rotating the secret invalidates the stored keys — that is what
+rotating a key-encryption key means, and the panel says so.
+
+## Your own action
+
+```ts
+import { defineAiAction } from "@heyo-sh/heyo-cms";
+
+defineAiAction({
+  name: "tone-of-voice",
+  appliesTo: ["text", "textarea", "richText"],
+  prompt: "Rewrite this in the house voice: plain, concrete, no adjectives.",
+});
+```
+
+Registered actions appear in `cms.inspect().ai.actions`, which is where to look
+when a button is missing from a field that names it.
+
+## Upgrading from the document chat
+
+`ai.chat` and `collection.ai.chat` were removed with the document chat they
+configured. Both are now start-up errors rather than ignored keys: a
+configuration that still carries them has an opinion about what AI may read,
+and shipping an agent that writes while silently discarding that opinion would
+be the worst possible upgrade.
+
+- `ai.chat` → `ai.assistant`.
+- `collection.ai.chat` → delete it. Reach is decided at runtime from the
+  configuration and the actor, not from a per-collection whitelist.
+- `POST /:collection/:id/chat` → `POST /ai/assistant`. The old route 404s; it
+  is not redirected, because the replacement is not drop-in compatible.
+- `cms.ai.chat()` → `cms.ai.runAssistant()`, which streams events rather than
+  answering once.

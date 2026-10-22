@@ -1,4 +1,8 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+
+import { defineCollection, heyoCms } from "../src/config";
+import { sqlite } from "../src/db/sqlite";
 
 import { CmsConfigError } from "../src/errors";
 import {
@@ -14,7 +18,6 @@ import {
   richText,
   select,
   seoFields,
-  slug,
   text,
 } from "../src/fields";
 
@@ -52,11 +55,18 @@ describe("field builders", () => {
     expect(tags.schema.safeParse(["c"]).success).toBe(false);
   });
 
-  test("slug is unique and indexed unless told otherwise", () => {
-    expect(slug({}).column).toMatchObject({ unique: true, index: true });
-    expect(slug({ unique: false }).column.unique).toBe(false);
-    expect(slug({ required: true }).schema.safeParse("hello-world").success).toBe(true); // prettier-ignore
-    expect(slug({ required: true }).schema.safeParse("Hello World").success).toBe(false); // prettier-ignore
+  // There is no `slug` type: a handle is a `text` field with the constraints
+  // spelled out, and nothing in the engine derives one field from another.
+  test("a handle is text with unique, index and a pattern", () => {
+    const handle = text({
+      required: true,
+      unique: true,
+      index: true,
+      pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    });
+    expect(handle.column).toMatchObject({ unique: true, index: true });
+    expect(handle.schema.safeParse("hello-world").success).toBe(true);
+    expect(handle.schema.safeParse("Hello World").success).toBe(false);
   });
 
   test("relation records what it points at", () => {
@@ -85,6 +95,32 @@ describe("field builders", () => {
     );
   });
 
+  test("a hidden field cannot be required, even when it has a default", () => {
+    expect(() => text({ required: true, admin: { hidden: true } })).toThrow(
+      /fields.text.admin.hidden.*hidden field cannot be required/,
+    );
+    expect(() =>
+      boolean({ required: true, default: false, admin: { hidden: true } }),
+    ).toThrow(/hidden field cannot be required/);
+    expect(text({ admin: { hidden: true } }).required).toBe(false);
+    expect(text({ required: true, admin: { hidden: false } }).required).toBe(
+      true,
+    );
+
+    // Startup validation also covers definitions contributed without builders.
+    const supplied = { ...text({ required: true }), admin: { hidden: true } };
+    expect(() =>
+      heyoCms({
+        database: () => sqlite(new Database(":memory:")),
+        collections: {
+          posts: defineCollection({ fields: { secret: supplied } }),
+        },
+      }),
+    ).toThrow(
+      /collections.posts.fields.secret.admin.hidden.*hidden field cannot be required/,
+    );
+  });
+
   test("an unknown AI action on a field is a typo, not a feature", () => {
     expect(() => text({ ai: { translte: true } })).toThrow(/unknown AI action/);
     // A custom action brings its own prompt, so it is accepted.
@@ -95,6 +131,11 @@ describe("field builders", () => {
 
   test("invalid options fail at build time with the field in the message", () => {
     expect(() => select({ options: [] })).toThrow(/fields.select/);
+    for (const key of ["width", "position", "condition"]) {
+      expect(() => text({ admin: { [key]: true } })).toThrow(
+        `fields.text.admin.${key}`,
+      );
+    }
   });
 
   test("seoFields is a preset, not a plugin", () => {
@@ -105,9 +146,11 @@ describe("field builders", () => {
       "ogImage",
       "canonical",
     ]);
-    expect(fields.seoTitle.ai?.generate).toMatchObject({
-      context: ["title", "body"],
+    expect(fields.seoTitle.aiGenerate).toMatchObject({
+      label: "Suggest an SEO title",
     });
+    // A preset cannot assume every collection has title and body fields.
+    expect(fields.seoTitle.aiGenerate?.context).toBeUndefined();
   });
 });
 

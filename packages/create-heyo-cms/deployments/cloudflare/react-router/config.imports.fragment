@@ -1,0 +1,1 @@
+import type { ImagesConfig } from "@heyo-sh/heyo-cms/types";

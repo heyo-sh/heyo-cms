@@ -1,0 +1,67 @@
+---
+title: Webhooks
+description: Signed, retried, replayable, and never able to fail the write that caused them.
+---
+
+# Webhooks
+
+```ts
+webhooks: {
+  enabled: true,
+  signing: { algorithm: "hmac-sha256", secret: process.env.WEBHOOK_SECRET! },
+  delivery: { retries: 5, backoff: "exponential", timeout: "10s", dlq: true },
+  managedInAdmin: true,
+}
+```
+
+Subscriptions are rows, managed through `cms.webhooks` or the endpoints under
+`/webhooks`. An event type may be exact (`document.updated`), a family
+(`document.*`) or everything (`*`) — a family keeps working as the catalogue
+grows, which is why it exists.
+
+```ts
+await cms.webhooks.create({
+  url: "https://example.com/hook",
+  events: ["document.*"],
+  headers: { "x-tenant": "acme" },
+});
+```
+
+## Every delivery carries
+
+```
+x-heyo-event-id      the event; the same across retries and replays
+x-heyo-delivery-id   this attempt
+x-heyo-attempt       1, 2, 3…
+x-heyo-signature     t=<unix>,v1=<hmac-sha256 of "t.body">
+```
+
+```ts
+import { verifySignature } from "@heyo-sh/heyo-cms/webhooks";
+
+const ok = await verifySignature({ body, header, secret }); // in your receiver
+```
+
+The timestamp is inside the signed string, so a captured delivery cannot be
+replayed at a consumer forever.
+
+## Failure
+
+Five attempts with exponential backoff, then the delivery is `failed` and
+stays in the table — a dead letter that disappears is one nobody can act on.
+`cms.webhooks.retry(id)` sends it again as a new attempt carrying the same
+event id, so a consumer's idempotency key still matches and the original
+response stays readable in the panel.
+
+**Delivery never fails an event.** The outbox worker hands each committed
+event to the listeners first and to the subscribers second, and the subscriber
+half records its own failures rather than throwing — otherwise one unreachable
+endpoint would replay the event to every other subscriber on the next pass.
+
+**Ordering is per document, not global.** The outbox is drained in insertion
+order and a document's events are inserted in the order they happened; across
+documents, parallel delivery is the point.
+
+A subscription's custom headers cannot start with `x-heyo-`: a subscription
+that could rewrite the event id or the signature could disable its own
+verification by accident.

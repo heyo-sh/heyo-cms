@@ -3,7 +3,15 @@ import { describe, expect, test } from "bun:test";
 import { cmsUsers, oidc } from "../src/auth";
 import { defineCollection, defineGlobal, heyoCms } from "../src/config";
 import { CmsConfigError } from "../src/errors";
-import { media, relation, richText, select, slug, text } from "../src/fields";
+import { isRtlLocale, localeName } from "../src/i18n/index";
+import {
+  media,
+  relation,
+  richText,
+  select,
+  seoFields,
+  text,
+} from "../src/fields";
 import type { DatabaseAdapter } from "../src/types/database";
 
 const database = { id: "fixture" } as unknown as DatabaseAdapter;
@@ -12,7 +20,7 @@ const posts = () =>
   defineCollection({
     fields: {
       title: text({ required: true, localized: true }),
-      handle: slug({}),
+      handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
       status: select({
         options: ["draft", "review", "published"],
         default: "draft",
@@ -31,8 +39,8 @@ describe("heyoCms", () => {
     expect(cms._config.admin.path).toBe("/admin");
     expect(cms._config.trash).toEqual({ enabled: true, purgeAfter: "30d" });
     expect(cms._config.i18n.defaultLocale).toBe("en");
-    // Locales live in a table so a new language is not a migration.
-    expect(cms._config.i18n.locales).toBe("dynamic");
+    // A site that never says anything about languages speaks one.
+    expect(cms._config.i18n.locales).toEqual(["en"]);
   });
 
   test("derives a URL-safe slug from the collection name", () => {
@@ -127,32 +135,50 @@ describe("heyoCms", () => {
     ).toThrow(/no collection or global/);
   });
 
-  test("refuses chat context that names a field the collection lacks", () => {
-    expect(() =>
-      heyoCms({
-        database,
-        collections: {
-          posts: defineCollection({
-            fields: { title: text({}) },
-            ai: { chat: { context: ["title", "body"] } },
-          }),
-        },
-      }),
-    ).toThrow(/not a field/);
-  });
-
-  test("refuses a chat that may write a field it cannot read", () => {
+  // The document chat was removed in favour of the panel-wide assistant. A
+  // configuration that still carries its keys has an opinion about what AI may
+  // read, and silently ignoring that opinion while shipping an agent that
+  // writes would be the worst possible upgrade.
+  test("refuses the removed per-collection ai.chat with a migration message", () => {
     expect(() =>
       heyoCms({
         database,
         collections: {
           posts: defineCollection({
             fields: { title: text({}), body: richText({}) },
-            ai: { chat: { context: ["title"], writable: ["body"] } },
-          }),
+            ai: { chat: { context: ["title", "body"] } },
+          } as never),
         },
       }),
-    ).toThrow(/cannot write a field it cannot read/);
+    ).toThrow(/per-collection ai.chat was removed/);
+  });
+
+  test("refuses the removed ai.chat, naming ai.assistant", () => {
+    expect(() =>
+      heyoCms({
+        database,
+        collections: { posts: posts() },
+        ai: {
+          auth: { openai: { type: "api-key", token: "sk-test" } },
+          defaultModel: { provider: "openai", model: "gpt-4o-mini" },
+          chat: { enabled: true },
+        } as never,
+      }),
+    ).toThrow(/ai\.assistant/);
+  });
+
+  test("refuses an assistant budget that is not a positive integer", () => {
+    expect(() =>
+      heyoCms({
+        database,
+        collections: { posts: posts() },
+        ai: {
+          auth: { openai: { type: "api-key", token: "sk-test" } },
+          defaultModel: { provider: "openai", model: "gpt-4o-mini" },
+          assistant: { maxTurns: 0 },
+        },
+      }),
+    ).toThrow(/ai.assistant.maxTurns/);
   });
 
   test("refuses an AI model whose provider has no credentials", () => {
@@ -212,6 +238,87 @@ describe("heyoCms", () => {
     ).toBe("global");
   });
 
+  test("accepts camelCase field names, and `seoFields()` with them", () => {
+    const cms = heyoCms({
+      database,
+      collections: {
+        pages: defineCollection({
+          fields: { title: text({ required: true }), ...seoFields() },
+        }),
+      },
+    });
+    // The preset in section 11 is unusable if a field cannot be called
+    // `seoTitle`, which is also what every TypeScript developer will write.
+    expect(Object.keys(cms._config.collections.pages?.fields ?? {})).toContain(
+      "seoDescription",
+    );
+
+    // A collection name still becomes a slug, and a slug is a URL.
+    expect(() =>
+      heyoCms({ database, collections: { blogPosts: posts() } }),
+    ).toThrow(/collection name/);
+    // A dot would make `where: { "a.b": ... }` ambiguous.
+    expect(() =>
+      heyoCms({
+        database,
+        collections: {
+          pages: defineCollection({ fields: { "a.b": text({}) } }),
+        },
+      }),
+    ).toThrow(/field name/);
+  });
+
+  test("i18n is a list of codes, and the default has to be in it", () => {
+    const cms = heyoCms({
+      database,
+      collections: { posts: posts() },
+      i18n: { defaultLocale: "en", locales: ["en", "fr"] },
+    });
+    expect(cms._config.i18n.locales).toEqual(["en", "fr"]);
+    // The code is all a deployment types; the name follows from it.
+    expect(cms._config.i18n.defaultLocale).toBe("en");
+    expect(cms.locales.list()).toEqual([
+      { code: "en", name: "English", rtl: false, isDefault: true },
+      { code: "fr", name: "French", rtl: false, isDefault: false },
+    ]);
+
+    // A default nobody offers would make every untranslated field resolve to
+    // nothing — a typo that shows up as empty pages rather than as an error.
+    expect(() =>
+      heyoCms({
+        database,
+        collections: { posts: posts() },
+        i18n: { defaultLocale: "de", locales: ["en", "fr"] },
+      }),
+    ).toThrow(/is not in i18n.locales/);
+
+    expect(() =>
+      heyoCms({
+        database,
+        collections: { posts: posts() },
+        i18n: { locales: ["en", "en"] },
+      }),
+    ).toThrow(/duplicate locale codes/);
+
+    expect(() =>
+      heyoCms({
+        database,
+        collections: { posts: posts() },
+        i18n: { locales: ["English"] },
+      }),
+    ).toThrow(/not a locale code/);
+
+    // Naming languages without naming a default takes the first: the order
+    // somebody typed says which language the content is written in.
+    const polish = heyoCms({
+      database,
+      collections: { posts: posts() },
+      i18n: { locales: ["pl", "en"] },
+    });
+    expect(polish._config.i18n.defaultLocale).toBe("pl");
+    expect(polish.locales.list()[0]?.name).toBe("Polish");
+  });
+
   test("validates editor auth options eagerly", () => {
     expect(() => cmsUsers({ methods: [] })).toThrow(/at least one sign-in/);
     expect(
@@ -220,6 +327,26 @@ describe("heyoCms", () => {
     ).toThrow(/is not a duration/);
     expect(() => oidc({ issuer: "acme.example" })).toThrow(/issuer URL/);
     expect(cmsUsers({ methods: ["password"] }).kind).toBe("cms-users");
+  });
+});
+
+describe("locale names", () => {
+  test("turn a code into something a switcher can show", () => {
+    expect(localeName("en")).toBe("English");
+    expect(localeName("pl")).toBe("Polish");
+    // A region is part of the language, not a second list to configure.
+    expect(localeName("pt-BR")).toBe("Portuguese (Brazil)");
+    expect(localeName("en-GB")).toBe("English (United Kingdom)");
+    expect(localeName("de-AT-1996")).toBe("German (Austria)");
+    // A region nobody listed is kept verbatim rather than dropped.
+    expect(localeName("es-419")).toBe("Spanish (419)");
+    // And a code nobody knows is returned as written: a switcher reading
+    // "kw" is a configuration to fix, and inventing a name would hide it.
+    expect(localeName("kw")).toBe("kw");
+
+    expect(isRtlLocale("ar")).toBe(true);
+    expect(isRtlLocale("he-IL")).toBe(true);
+    expect(isRtlLocale("en")).toBe(false);
   });
 });
 
@@ -287,9 +414,15 @@ describe("cms.inspect()", () => {
       localized: true,
       required: true,
     });
-    // Routes arrive with the router in stage 7; an empty list is the honest
-    // answer until then.
-    expect(inspection.routes).toEqual([]);
+    // The routes are the generated ones, carrying the configured base path:
+    // what somebody printing this wants is the URL they can call.
+    expect(inspection.routes).toContainEqual({
+      method: "GET",
+      path: "/cms/posts",
+      source: "core",
+      middleware: 0,
+    });
+    expect(inspection.admin).toEqual({ path: "/cms/admin", panel: null });
   });
 
   test("refuses two plugins that register the same route", () => {

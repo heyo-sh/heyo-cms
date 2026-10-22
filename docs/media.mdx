@@ -1,0 +1,80 @@
+---
+title: Media
+description: Storage adapters, variants, and a lifecycle in which nothing an edit does destroys a file.
+---
+
+# Media
+
+Media is a high-level setting, not a plugin: without it the CMS does not do
+its job.
+
+```ts
+uploads: {
+  storage: s3({ bucket, region }),
+  limits: { maxFileSize: "25mb", accept: ["image/*", "application/pdf"] },
+  images: {
+    processor: sharpImages(),
+    convert: { to: "webp", keep: ["image/gif", "image/svg+xml"] },
+    stripMetadata: true,
+    focalPoint: true,
+    variants: { mode: "on-demand", sizes: { thumb: { width: 320, height: 320, fit: "cover" } } },
+  },
+  retention: { orphanAfterUnreferenced: true, purgeAfter: "30d", reclaimOnReference: true },
+}
+```
+
+```ts
+const file = await cms.media.upload({ file: blob, filename: "photo.jpg" });
+await cms.api.posts.update({ id, data: { cover: file.id } });
+const thumb = await cms.media.variant({ id: file.id, variant: "thumb" });
+```
+
+## Adapters
+
+`local`, `memory`, `s3`, `r2` (credentials **or** a Workers binding), `gcs`
+and `azure`. The cloud ones are four HTTP verbs and two signing schemes — AWS
+SigV4 and Azure shared key, on Web Crypto — rather than four vendor SDKs, and
+`StorageAdapter` is five methods, so an in-house store is an afternoon.
+
+## Nothing an edit does destroys a file
+
+Every save recomputes which files the document points at — per locale,
+including images inside rich text — and writes the result to `media_usages`
+inside the same transaction. Losing the last reference marks the file
+`orphaned`:
+
+- the bytes stay where they are and keep serving from the same URL,
+- `purgeAfter` is set, and the panel can say "gone on the 12th",
+- using the file again anywhere reclaims it, deadline cleared,
+- `media-gc` deletes it only after the deadline **and** only after re-checking
+  the references immediately before the delete.
+
+The trash keeps its references on purpose: a picture used by a document you
+can still restore is not an unused picture.
+
+## Variants
+
+|                    | `on-demand`                  | `pregenerate`        |
+| ------------------ | ---------------------------- | -------------------- |
+| Rendered           | first request                | at upload            |
+| Upload cost        | none                         | one render per size  |
+| A size added later | applies to the whole archive | applies to new files |
+
+**`on-demand` without a processor is a supported deployment**, not a
+misconfiguration: the original is served and its URL carries `?w=&h=&fit=&q=`
+for an image CDN to render at the edge. That is what the Cloudflare templates
+ship, because a Worker cannot load a native codec. `convert`, `maxDimensions`
+and `pregenerate` do need a processor, and say so while the configuration is
+loading.
+
+Only declared sizes can be requested. Arbitrary dimensions in a URL are how a
+stranger fills a bucket one pixel at a time.
+
+## Without a codec
+
+Dimensions are read from the file header — PNG, JPEG, GIF, WebP, AVIF and SVG
+— so `maxImageDimensions` is a real limit on every runtime, and the stored
+MIME type is what the bytes support rather than what the browser claimed.
+`stripMetadata` removes EXIF, XMP and text chunks in plain TypeScript, because
+publishing the GPS coordinates in somebody's holiday photograph is a privacy
+obligation rather than an optimisation. ICC colour profiles are kept.

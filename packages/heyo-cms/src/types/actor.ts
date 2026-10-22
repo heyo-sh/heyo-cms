@@ -16,5 +16,12 @@ export interface Actor {
 
 export type ActorSource = "session" | "api-key";
 
-/** Where an operation entered the engine. Carried through to hooks and events. */
-export type OperationSource = "rest" | "admin" | "local" | "cli" | "job";
+/**
+ * Where an operation entered the engine. Carried through to hooks and events.
+ *
+ * `ai` is the global assistant writing on an editor's behalf. It is a source
+ * and not an actor: the person who asked for the change is still the actor,
+ * because "who is accountable" and "what typed it" are different questions and
+ * an audit trail that confuses them cannot answer either.
+ */
+export type OperationSource = "rest" | "admin" | "local" | "cli" | "job" | "ai";

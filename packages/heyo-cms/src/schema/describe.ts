@@ -77,9 +77,12 @@ export function migrationName(steps: MigrationStep[]): string {
 }
 
 function slugifyIdentifier(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 60);
+  // Underscores are trimmed with a scan rather than /^_+|_+$/, whose end
+  // anchor backtracks quadratically on underscore-heavy input.
+  const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  let start = 0;
+  let end = slug.length;
+  while (start < end && slug[start] === "_") start++;
+  while (end > start && slug[end - 1] === "_") end--;
+  return slug.slice(start, end).slice(0, 60);
 }
