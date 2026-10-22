@@ -1,6 +1,6 @@
 {
   "name": "@heyo-sh/create-heyo-cms",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Create a Heyo CMS project: three frameworks, two deployments, three databases.",
   "keywords": [
     "cms",
