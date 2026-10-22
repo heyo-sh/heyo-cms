@@ -26,7 +26,7 @@
     },
     "packages/create-heyo-cms": {
       "name": "@heyo-sh/create-heyo-cms",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": {
         "create-heyo-cms": "./dist/index.js",
       },
@@ -36,7 +36,7 @@
     },
     "packages/heyo-cms": {
       "name": "@heyo-sh/heyo-cms",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": {
         "heyo-cms": "./dist/cli.js",
       },
@@ -67,7 +67,7 @@
     },
     "packages/heyo-cms-admin": {
       "name": "@heyo-sh/heyo-cms-admin",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "devDependencies": {
         "@happy-dom/global-registrator": "20.14.5",
         "@heyo-sh/heyo-cms": "workspace:*",
@@ -92,7 +92,7 @@
         "tailwindcss": "4.3.3",
       },
       "peerDependencies": {
-        "@heyo-sh/heyo-cms": "^0.1.0",
+        "@heyo-sh/heyo-cms": "0.1.0",
       },
     },
     "website": {

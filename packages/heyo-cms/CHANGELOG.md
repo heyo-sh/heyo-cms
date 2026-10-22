@@ -4,6 +4,222 @@
 
 ### Minor Changes
 
+- a0603d9: `heyoCmsClient()` now defaults to the same-origin `/api/heyo-cms` mount. Generated projects export `cmsClient` and register their server CMS through a type-only `heyo-cms.client.d.ts`, so the no-argument browser client retains collection types without bundling server configuration. `heyoCmsClient<typeof cms>()` remains available for custom and multi-CMS clients.
+- a0603d9: The first administrator can be created from the sign-in screen.
+
+  A CMS whose `cms_users` table is empty has nobody to sign in as, so the panel
+  now offers to create that account instead of asking for a password that does
+  not exist — `heyo-cms create-admin` is no longer the only way in, and the
+  generated projects no longer print it as a required step.
+
+  The offer closes behind the account it creates: `POST /auth/setup` is
+  registered only while there are no accounts, and the count is taken inside the
+  transaction that does the insert, so two browsers racing produce one
+  administrator and one 409. `GET /panel` reports it as `auth.setupRequired`,
+  `cms.auth.setup` is the same thing without HTTP, and
+  `admin.auth.firstUser: false` turns it off for deployments that provision
+  editors from a pipeline. `firstUser: { roles: [...] }` names the roles the
+  first account is given; the default is `admin`.
+
+- a0603d9: Replace the document chat with a panel-wide AI assistant, and give every
+  document a revision.
+
+  **The assistant.** One agent, running in the CMS process, reachable from every
+  signed-in screen. It calls typed tools that go through the ordinary public API
+  with the signed-in actor and `source: "ai"`, so a change it makes runs exactly
+  the same access control, field access, validation, hooks, media accounting,
+  events and activity log as somebody typing into the form. There is no SQL tool,
+  no database adapter, no `fetch`, no file read and no credential tool.
+
+  - `ai.assistant` configures a model, one standing instruction and the budgets.
+    Nothing else: what the agent may read and write is derived at runtime from
+    the live configuration and the actor, so there is no second access-control
+    system to drift from the real one.
+  - `POST /ai/assistant` streams server-sent events with the CMS's own contract,
+    independent of the agent library's internals. `POST /ai/assistant/plans/:id/approve`
+    applies a stored plan.
+  - A single unambiguous edit to an existing record saves immediately. Creating,
+    deleting, restoring and anything touching more than one record become a plan
+    with an expiry that a human approves; approving replays the stored row rather
+    than asking the model again.
+  - `@mariozechner/pi-agent-core` is a new optional peer dependency, imported
+    lazily alongside `@mariozechner/pi-ai`. Without it the endpoint answers
+    `ai_assistant_runtime_missing` by name.
+  - New events `ai.agent.completed`, `ai.agent.failed` and
+    `ai.agent.mutation.applied` carry run id, model, usage, duration, tool names
+    and changed field names — never the prompt, the answer or the record.
+
+  **Revisions (all writers, not only AI).** `documents` gains a `revision` column
+  starting at `1` and incremented by every write, exposed on every read.
+  `expectedRevision` on `update`/`delete`/`restore` — `If-Match` or `revision` in
+  the body over HTTP — makes a write conditional and answers `409
+revision_conflict` instead of overwriting. The panel sends it on every save and
+  shows a conflict rather than silently winning. `CreateArgs`/`UpdateArgs` also
+  accept `idempotencyKey`, recorded inside the write transaction so a retried
+  request does not run the hooks and the outbox twice.
+
+  The activity log gains a `source` column (`admin`, `rest`, `job`, `ai`, …),
+  filterable through `GET /activity?source=ai`, and carries `runId` in `changes`
+  for agent writes. The actor stays the human who asked.
+
+  **Breaking.** The document chat is removed rather than deprecated:
+
+  - `ai.chat` and `collection.ai.chat` are start-up errors with a migration
+    message, including from untyped JavaScript. Ignoring a deployment's stated
+    opinion about what AI may read, while shipping an agent that writes, would be
+    the worst possible upgrade.
+  - `POST /:collection/:id/chat` is gone and 404s; it is not redirected, because
+    the replacement is not drop-in compatible.
+  - `cms.ai.chat()` → `cms.ai.runAssistant()`; `PanelAi.chat` → `PanelAi.assistant`;
+    `PanelCollection.chat` and `PanelChat` are removed, as is the panel's `AiDock`.
+
+  Field actions (`field.ai`) are unchanged.
+
+  Also fixes a latent bug in the MongoDB adapter: a conditional update re-read its
+  rows through the original filter, so any update whose `WHERE` matched on a
+  column it was about to change reported that it had modified zero rows.
+
+- a0603d9: **`i18n` is a list of codes.** It used to be three decisions in a trench coat
+  — a registry mode, a locale shape, and a fallback grammar with two modes and a
+  flag:
+
+  ```ts
+  // before
+  i18n: {
+    locales: "dynamic",
+    defaultLocale: "en",
+    fallback: { mode: "default-locale", markAsFallback: true },
+  }
+
+  // now
+  i18n: { defaultLocale: "en", locales: ["en", "fr"] }
+  ```
+
+  Codes and nothing else. The English name of a language and whether it is
+  written right to left follow from the code, so `locales: ["pl"]` is enough for
+  the panel's switcher to read "Polish" — `localeName()`, `isRtlLocale()` and
+  `LOCALE_NAMES` are exported for anything else that needs the same table. The
+  configuration is checked while the module loads: `defaultLocale` has to be one
+  of `locales`, codes have to be BCP 47 tags, and duplicates are refused.
+  Leaving the section out is the same as `{ defaultLocale: "en", locales:
+["en"] }`, so a single-language site says nothing at all.
+
+  **Fallback is one rule instead of a configuration section.** A field with no
+  value in the language being read is answered from `defaultLocale`, and the
+  document names the fields that happened to in `_fallback` — what the panel's
+  "from en" badge and a frontend's "untranslated" badge both read. A single call
+  still overrides it: `fallbackLocale: false` shows the gaps, a code forces one
+  source. `fallback: { mode: "chain", … }` is gone; a chain was a per-locale
+  graph that no deployment could keep true after the second language.
+
+  **Languages are configuration, so the registry is gone.** `POST /locales`,
+  `DELETE /locales/:code`, `cms.locales.create/remove`, the client's equivalents,
+  the `locales` table and the `locale.created` / `locale.deleted` events no
+  longer exist. `GET /locales` and `cms.locales.list()` stay and answer from the
+  configuration, now synchronously. The panel's Languages tab lists what is
+  declared instead of offering to add a row the next deploy would contradict.
+  Adding a language is a line in `i18n.locales`; removing one leaves the
+  translations stored under the code untouched, so putting it back brings them
+  back.
+
+  Migrating: replace `locales: "dynamic"` with the codes you have registered,
+  drop `fallback` (the default-locale behaviour it described is now the only
+  one), and drop the `locales` table — `heyo-cms generate` writes that migration
+  for you.
+
+- a0603d9: Create missing document and global language variants from the editor's locale selector, saving pending edits first. Optionally translate every localized text field with AI, preserving rich-text images, media IDs and links. Track which language fields actually exist independently of defaults, keep shared values intact and only save a new version once all translations succeed.
+- a0603d9: **The `slug` field type is gone.** It was `text` with `unique`, `index` and a
+  hyphen pattern already set, plus a `from` option that promised the value would
+  be derived from another field and never did it — nothing in the engine
+  generates one field out of another, so `from` only ever reached the panel as a
+  placeholder. A type whose only feature is a default and a promise teaches the
+  wrong thing. A URL handle is a text field:
+
+  ```ts
+  handle: text({
+    unique: true,
+    index: true,
+    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+  });
+  ```
+
+  and deriving it from the title is a `create.before` hook, which runs before
+  validation precisely so that it can fill a required field. The templates, the
+  examples and the documentation say so. Existing projects change the field type
+  in the configuration; the column, the index and the stored values are
+  identical, so the generated migration is empty.
+
+  **The panel's property pane reads as a property pane.** Field names are muted,
+  the way every other label that names something rather than being it is; the
+  accordion's content clears the trigger row it opens out of; and the breadcrumb
+  gives the `unsaved` badge room to breathe. A new document no longer carries
+  the line "Nothing is written until you save." — the bar already says the
+  document is unsaved, and nothing has been written anyway.
+
+  **A `media` field is a drop zone, not a button.** The file being attached is
+  nearly always on the laptop rather than in the library, and the gesture people
+  reach for is dropping it on the field; it used to be a button that opened a
+  dialog with a search box and a second upload button in it. The zone uploads
+  what you drop or pick, the library is one link underneath for the file that is
+  already uploaded, and a chosen file is a card with a thumbnail that you can
+  drop a replacement onto.
+
+  **The AI button closes the assistant.** It only ever opened it, which left the
+  one conversational surface in the panel with no visible way out.
+
+### Patch Changes
+
+- a0603d9: Make the assistant's "this" mean what the editor is pointing at.
+
+  `pageContext` is the only thing that gives "rewrite this", "translate this
+  page" and "change the alt text of this image" a referent, and every failure in
+  it is silent: the agent answers confidently about the wrong record. Six of
+  them:
+
+  - **A slug was resolved as a name.** The panel always sends the slug from the
+    URL, but the lookup tried the configuration's keys first — so in a project
+    where one collection is slugged `articles` and another is _named_ `articles`,
+    the assistant read, described and offered to write the wrong one. Page
+    contexts now match slugs only. A tool argument matching both a name and a
+    different collection's slug is refused rather than picking a write target.
+  - **The kind was not checked against the slug.** A document context naming a
+    global resolved to the global, and `get_current_page` then failed with "no
+    collection named site_settings" in the middle of a conversation. A context
+    whose kind disagrees with what the slug names now resolves to nothing, which
+    is the answer the prompt already knows how to handle.
+  - **The open tab never travelled.** A record with two rich-text fields is two
+    writing surfaces, and "rewrite this section" had no answer. `pageContext.tab`
+    now carries the rich-text tab, the settings tab and the media library's
+    status, and the prompt and `get_current_page` both name it. Only configured
+    rich-text fields and known tabs can be interpolated into the system prompt;
+    arbitrary text from a `?tab=` URL is discarded. `find_media` searches
+    orphaned files by default when that is the open media tab.
+  - **The media library's selection never travelled.** With a file open in the
+    details pane, "this image" was unresolvable. `pageContext.mediaId` carries
+    it, re-read through `cms.media` (media reads are public by design). The
+    selected file's unsaved filename/crop/focal fields are now reported by name
+    so the assistant refuses to overwrite that file until the form is saved.
+  - **A new, unsaved form looked like a saved one.** `get_current_page` answered
+    with the same keys as a stored record, which reads as "there is a record
+    here, you just did not get it"; a list screen was equally silent about having
+    no record at all. Both now say so, and a list points at `find_documents`.
+  - **`runAssistant({ locale })` was declared and read by nothing.** A request
+    with no page context silently used the project's default language. It is now
+    the floor under the page's locale, and the panel sends the language being
+    edited from every screen — including the ones with no record, where it was
+    previously dropped entirely.
+
+  On the panel side, `usePageContext()` no longer takes a dependency list: a
+  screen that got it wrong (`dirty.size` rather than the field names) kept
+  sending a stale set of unsaved fields, and the unsaved field the assistant was
+  not told about is exactly the one it would have overwritten.
+
+- a0603d9: Show TypeScript labels in API usage sheets. Add a read-only Deployment settings tab and show effective assistant model and limits in AI settings without exposing credentials or instructions.
+
+## 0.1.0
+
+### Minor Changes
+
 - Stage 8: the panel — shadcn, TipTap v3, and one bundle for every deployment.
 
   - **`@heyo-sh/heyo-cms-admin` ships the panel**, and the integration is one
