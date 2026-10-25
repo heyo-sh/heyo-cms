@@ -40,26 +40,6 @@ describe("field builders", () => {
     expect(field.schema.safeParse("abcdef").success).toBe(false);
   });
 
-  test("select accepts only its options", () => {
-    const status = select({
-      options: ["draft", "review", "published"],
-      default: "draft",
-      required: true,
-    });
-    expect(status.schema.safeParse("review").success).toBe(true);
-    expect(status.schema.safeParse("archived").success).toBe(false);
-    expect(status.defaultValue).toBe("draft");
-    // The engine attaches no meaning to it: it is a text column with a default.
-    expect(status.column.type).toBe("text");
-  });
-
-  test("multiselect stores a JSON array", () => {
-    const tags = multiselect({ options: ["a", "b"], required: true });
-    expect(tags.column).toMatchObject({ type: "json", array: true });
-    expect(tags.schema.safeParse(["a", "b"]).success).toBe(true);
-    expect(tags.schema.safeParse(["c"]).success).toBe(false);
-  });
-
   test("a list validates every row with its fields' own schemas", () => {
     const sources = list({
       fields: {
@@ -122,6 +102,26 @@ describe("field builders", () => {
     expect(refused(() => list({ fields: { "two words": text() } }))).toContain("identifier"); // prettier-ignore
     expect(refused(() => list({ fields: { q: text() }, index: true }))).toContain("cannot be unique or indexed"); // prettier-ignore
     expect(refused(() => list({ fields: { q: text() }, minItems: 3, maxItems: 1 }))).toContain("maxItems"); // prettier-ignore
+  });
+
+  test("select accepts only its options", () => {
+    const status = select({
+      options: ["draft", "review", "published"],
+      default: "draft",
+      required: true,
+    });
+    expect(status.schema.safeParse("review").success).toBe(true);
+    expect(status.schema.safeParse("archived").success).toBe(false);
+    expect(status.defaultValue).toBe("draft");
+    // The engine attaches no meaning to it: it is a text column with a default.
+    expect(status.column.type).toBe("text");
+  });
+
+  test("multiselect stores a JSON array", () => {
+    const tags = multiselect({ options: ["a", "b"], required: true });
+    expect(tags.column).toMatchObject({ type: "json", array: true });
+    expect(tags.schema.safeParse(["a", "b"]).success).toBe(true);
+    expect(tags.schema.safeParse(["c"]).success).toBe(false);
   });
 
   test("slug is unique and indexed, per language when localized", () => {

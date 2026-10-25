@@ -50,15 +50,15 @@ const collections = () => ({
   posts: defineCollection({
     fields: {
       title: text({ required: true, localized: true }),
+      sources: list({
+        localized: true,
+        fields: { title: text({ required: true }), url: url() },
+      }),
       handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
       status: select({ options: ["draft", "published"], default: "draft" }),
       views: number({ integer: true }),
       tags: multiselect({ options: ["news", "guide"] }),
       author: relation("authors"),
-      sources: list({
-        localized: true,
-        fields: { title: text({ required: true }), url: url() },
-      }),
     },
   }),
 });
