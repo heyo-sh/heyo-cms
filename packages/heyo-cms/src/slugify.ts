@@ -140,17 +140,30 @@ export function slugify(input: string, options: SlugifyOptions = {}): string {
     )
     .join("");
 
-  const slug = transliterated
+  const joined = transliterated
     .normalize("NFKD")
     // The combining marks NFKD separated from their letters.
     .replace(/[\u0300-\u036f]/g, "")
     // An apostrophe joins rather than separates: "don't" is "dont".
     .replace(/['’`]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/[^a-z0-9]+/g, "-");
+  const slug = trimHyphens(joined);
 
   if (slug.length <= max) return slug;
   const cut = slug.slice(0, max);
   const boundary = cut.lastIndexOf("-");
-  return boundary >= max / 2 ? cut.slice(0, boundary) : cut.replace(/-+$/, "");
+  return boundary >= max / 2 ? cut.slice(0, boundary) : trimHyphens(cut);
+}
+
+/**
+ * Hyphens off both ends, without a regular expression: `/-+$/` backtracks
+ * quadratically on a long run of hyphens (CodeQL `js/polynomial-redos`), and
+ * this runs on whatever text an editor or an API client sends.
+ */
+function trimHyphens(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 45 /* "-" */) start++;
+  while (end > start && value.charCodeAt(end - 1) === 45) end--;
+  return value.slice(start, end);
 }

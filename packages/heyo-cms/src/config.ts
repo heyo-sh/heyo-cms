@@ -1159,7 +1159,8 @@ function validatePublicPath(value: string, basePath: string): void {
     throw new CmsConfigError(at, 'cannot be "/"; use a path such as "/media"');
   }
   if (!path.startsWith("/")) throw new CmsConfigError(at, 'must start with "/"'); // prettier-ignore
-  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) {
+  const segments = path.split("/").slice(1);
+  if (!segments.every((segment) => /^[A-Za-z0-9._~-]+$/.test(segment))) {
     throw new CmsConfigError(
       at,
       "may only contain letters, digits, dots, dashes, underscores and tildes between slashes",
