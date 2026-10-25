@@ -98,7 +98,8 @@ const examplesRoot = join(repositoryRoot, "examples");
 const logDirectory = join(repositoryRoot, ".heyo-playground");
 
 /**
- * The secret the cron routes check.
+ * The secret the cron routes check. A dev server is handed it in the
+ * project's `.env` (`devEnvFile`), the way the README tells a reader to.
  *
  * The write half of the API is not exercised with an injected token: an API
  * key is a row in the database, so a credential is created and signed in with
@@ -1473,6 +1474,18 @@ async function runHttpChecks(
   environment: Record<string, string>,
 ): Promise<number> {
   const base = `${baseUrl(example)}/api/heyo-cms`;
+
+  // First, while the dev server is the only process with the database open:
+  // a Cloudflare example's local D1 is one SQLite file, and the sweeps need its
+  // write lock, which the connection `loadExample` opens below would contend for.
+  try {
+    const cron = await assertCronRoute(baseUrl(example));
+    console.log(`  ✓ the cron route runs the sweeps (${cron.join(", ")})`);
+  } catch (error) {
+    console.log(`  ✗ ${errorMessage(error)}`);
+    return 1;
+  }
+
   const loaded = await loadExample(example, environment);
   try {
     const { user, token } = await httpCredentials(loaded.cms, base);
@@ -1492,6 +1505,41 @@ async function runHttpChecks(
   } finally {
     await loaded.dispose();
   }
+}
+
+/**
+ * `/api/cron`, the route a platform's cron calls: only with `CRON_SECRET`, and
+ * then it runs the sweeps.
+ *
+ * The secret reaches the dev server in `.env` (`devEnvFile`), so this is also
+ * the check that each template reads it at request time, from where a reader
+ * puts it. A route that read it at build time instead — Astro's
+ * `import.meta.env.CRON_SECRET` — passes in dev and breaks in production,
+ * which the scaffold test guards against.
+ */
+async function assertCronRoute(site: string): Promise<string[]> {
+  const cron = (authorization?: string) =>
+    fetch(`${site}/api/cron`, {
+      headers: authorization ? { authorization } : {},
+      signal: AbortSignal.timeout(30_000),
+    });
+
+  const anonymous = await cron();
+  await anonymous.arrayBuffer();
+  if (anonymous.status !== 401) {
+    throw new Error(`/api/cron without a secret answered ${anonymous.status}, not 401`); // prettier-ignore
+  }
+  const wrong = await cron("Bearer not-the-secret");
+  await wrong.arrayBuffer();
+  if (wrong.status !== 401) {
+    throw new Error(`/api/cron with the wrong secret answered ${wrong.status}, not 401`); // prettier-ignore
+  }
+  const authorized = await cron(`Bearer ${cronSecret}`);
+  const text = await authorized.text();
+  if (authorized.status !== 200 || !text.includes('"ranAt"')) {
+    throw new Error(`/api/cron with CRON_SECRET answered ${authorized.status}: ${text.slice(0, 200)}`); // prettier-ignore
+  }
+  return ["401 without", "401 wrong", "200 with"];
 }
 
 /**
@@ -1971,6 +2019,8 @@ async function startDevServer(
     logFile = openSync(output, "w");
   }
 
+  const restoreEnvFile = await devEnvFile(directory, { CRON_SECRET: cronSecret }); // prettier-ignore
+  const { CRON_SECRET: _inherited, ...inherited } = process.env;
   const child = spawn(
     binaryPath(directory, example.bin as string),
     ["dev", "--port", String(example.port)],
@@ -1979,9 +2029,8 @@ async function startDevServer(
       detached: true,
       stdio: logFile === undefined ? "inherit" : ["ignore", logFile, logFile],
       env: {
-        ...process.env,
+        ...inherited,
         ...environment,
-        CRON_SECRET: cronSecret,
         HEYO_TELEMETRY_DISABLED: "1",
         NODE_ENV: "development",
         BROWSER: "none",
@@ -1992,6 +2041,7 @@ async function startDevServer(
   const server: RunningServer = {
     stop: async () => {
       await stopDevServer(child, example.port);
+      await restoreEnvFile();
       if (logFile !== undefined) closeSync(logFile);
     },
   };
@@ -2004,6 +2054,38 @@ async function startDevServer(
     throw new Error(`${errorMessage(error)}${log}`);
   }
   return server;
+}
+
+/**
+ * Writes `values` into the project's `.env` for the life of a dev server, and
+ * returns what puts the file back.
+ *
+ * In the file rather than in the server's environment, because the file is
+ * what a reader has. Every framework sees a variable of the process; not every
+ * one hands `.env` to the code that reads it — Astro gives it to
+ * `import.meta.env` only, and a Worker sees neither unless its plugin loads
+ * the file — so a variable passed the easy way checks a path nobody uses. A
+ * `.env` of the reader's own is kept: the lines are added to it, and the file
+ * is restored byte for byte.
+ */
+async function devEnvFile(
+  directory: string,
+  values: Record<string, string>,
+): Promise<() => Promise<void>> {
+  const path = join(directory, ".env");
+  const previous = await readFile(path, "utf8").catch(() => null);
+  const names = new Set(Object.keys(values));
+  const kept = (previous ?? "")
+    .split("\n")
+    .filter((line) => !names.has(/^\s*(?:export\s+)?([\w.]+)\s*=/.exec(line)?.[1] ?? "")); // prettier-ignore
+  const added = Object.entries(values).map(
+    ([name, value]) => `${name}=${value}`,
+  );
+  await writeFile(path, `${[...kept.filter((line) => line !== ""), ...added].join("\n")}\n`); // prettier-ignore
+  return async () => {
+    if (previous === null) await rm(path, { force: true });
+    else await writeFile(path, previous);
+  };
 }
 
 /**

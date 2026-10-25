@@ -51,11 +51,23 @@ const { docs } = await cms.api.posts.find({ limit: 10 });
 <ul>{docs.map((post) => <li>{post.title}</li>)}</ul>
 ```
 
-## One setting the template changes for you
+## What the template changes for you
 
-`astro.config.ts` sets `security.checkOrigin: false`. Astro refuses any
-form-encoded POST whose `origin` does not match, which also refuses every API
-client that is not a browser — `curl -F file=@photo.jpg` sends no origin, so
+**`.env` reaches `process.env`.** Astro hands `.env` to `import.meta.env`
+only, and `heyo-cms.config.ts` reads `DATABASE_URL` and the storage keys from
+`process.env`, as the CLI does. `astro.config.ts` loads `.env`, then
+`.env.local`, with `process.loadEnvFile`; what the shell set wins.
+
+**Secrets are read at request time.** `src/pages/api/cron.ts` checks
+`getSecret("CRON_SECRET")` from `astro:env/server`, never
+`import.meta.env.CRON_SECRET`: Astro replaces `import.meta.env.*` with the
+value it finds at build time, which would write the secret into the server
+bundle and keep it there after the platform's secret changes. Read your own
+secrets the same way.
+
+**`security.checkOrigin: false`.** `astro.config.ts` turns it off. Astro
+refuses any form-encoded POST whose `origin` does not match, which also
+refuses every API client that is not a browser — `curl -F file=@photo.jpg` sends no origin, so
 uploads from these clients would be rejected. The CMS uses `SameSite=Lax`
 session cookies and bearer tokens for non-browser clients. SameSite protects
 cross-site POSTs, not same-site sibling origins: deploy on a trusted site,

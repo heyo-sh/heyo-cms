@@ -268,6 +268,62 @@ describe("the generator", () => {
     }
   });
 
+  test("never reads a variable through import.meta.env, which the build writes into the bundle", async () => {
+    // Astro replaces `import.meta.env.NAME` with the value it finds at build
+    // time, from `.env` or the shell, for every variable without a `PUBLIC_`
+    // prefix: a secret read that way is written into the server bundle and
+    // keeps answering after the platform's secret has been rotated. A bare or
+    // computed `import.meta.env` inlines every variable whose name appears in
+    // the file. Only the build's own flags may be read like that; settings
+    // are read at request time (`process.env`, `getSecret`).
+    const builds = new Set(["DEV", "PROD", "MODE", "SSR", "BASE_URL", "SITE", "ASSETS_PREFIX"]); // prettier-ignore
+    const code = /\.(?:astro|[cm]?[jt]sx?)$/;
+    // Comments may name the spelling to warn about it; only code is replaced.
+    // (`//` after a colon or a quote is a URL in a string, not a comment.)
+    const withoutComments = (source: string) =>
+      source
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    const offending: string[] = [];
+
+    for (const template of templates) {
+      for (const deployment of deployments) {
+        const project = await create({
+          projectName: `env-${template}-${deployment}`,
+          template,
+          deployment,
+          storage: deployment === "cloudflare" ? "r2" : "s3",
+        });
+        const files = (await readdir(project, { recursive: true })).filter((file) => code.test(file)); // prettier-ignore
+        for (const file of files) {
+          const source = withoutComments(await read(join(project, file)));
+          for (const [read, name] of source.matchAll(
+            /import\.meta\.env(?:\.(\w+))?/g,
+          )) {
+            if (name && (builds.has(name) || name.startsWith("PUBLIC_")))
+              continue;
+            offending.push(`${template}/${deployment}: ${file}: ${read}`);
+          }
+        }
+      }
+    }
+    expect(offending).toEqual([]);
+  });
+
+  test("hands .env to process.env in astro dev, where the configuration reads it", async () => {
+    // Astro gives `.env` to `import.meta.env` only; `heyo-cms.config.ts` reads
+    // `DATABASE_URL` and the storage keys from `process.env`, as the CLI,
+    // Next and React Router provide them.
+    for (const deployment of deployments) {
+      const project = await create({ projectName: `astro-env-${deployment}`, template: "astro", deployment, storage: deployment === "cloudflare" ? "r2" : "s3" }); // prettier-ignore
+      const config = await read(join(project, "astro.config.ts"));
+      expect(config).toContain("process.loadEnvFile");
+      expect(config.indexOf('".env"')).toBeLessThan(
+        config.indexOf('".env.local"'),
+      );
+    }
+  });
+
   test("renames the shipped gitignore, which npm will not publish as a dotfile", async () => {
     const project = await create();
     expect(await exists(join(project, ".gitignore"))).toBe(true);

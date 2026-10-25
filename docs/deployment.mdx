@@ -29,6 +29,17 @@ who owns the clock.
    DATABASE_URL=… heyo-cms create-admin --email you@example.com
    ```
 
+## Secrets are read at request time
+
+`CRON_SECRET`, connection strings and API tokens are read when a request
+arrives, from the platform: `process.env` in Next.js and React Router,
+`getSecret()` from `astro:env/server` in Astro. Never as
+`import.meta.env.CRON_SECRET`: Vite and Astro replace `import.meta.env.NAME`
+with the value found at build time, in `.env` or the shell, so the secret is
+written into the server bundle and the deployment keeps checking that value
+after the platform's secret has been changed. Only `PUBLIC_` variables and the
+build's own flags (`DEV`, `PROD`, `MODE`) belong in `import.meta.env`.
+
 ## Vercel
 
 `vercel.json` calls `/api/cron` every fifteen minutes with `CRON_SECRET` as a
