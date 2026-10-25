@@ -1,5 +1,72 @@
 # @heyo-sh/heyo-cms
 
+## 0.3.0
+
+### Minor Changes
+
+- 3bedc6e: **No backwards compatibility.** What existed only so that something older
+  kept working is gone:
+
+  - `ai: { generate }` on a field. Generation is `aiGenerate`; `generate` in
+    the `ai` map is refused when the configuration loads. The `ai` map is for
+    the field's other actions (`translate`, `improve`, `summarize`, `alt`,
+    `tags`, custom ones).
+  - The start-up errors for the removed document chat (`ai.chat`,
+    per-collection `ai`).
+  - Importing a dump in which a localized field holds one value instead of one
+    per language: the record is refused instead of the value being taken as
+    the default language.
+  - `locals.runtime.ctx` in the Astro adapter (Astro 5 and earlier); the
+    adapter reads `locals.cfContext`.
+
+- 8cc6e04: **`list()`: rows of the same few fields, as a field.** An FAQ, the sources of
+  an article, a change log — data with a structure that used to be either a
+  `json` field nobody wanted to edit or a `textarea` with a format the editor
+  had to remember and the site had to parse.
+
+  ```ts
+  faq: list({
+    localized: true,
+    fields: {
+      question: text({ required: true }),
+      answer: textarea({ required: true }),
+    },
+  }),
+  ```
+
+  The value is an array of row objects, stored as JSON in the document, typed
+  from the row's fields (`{ question: string; answer: string }[]`, optional
+  fields as optional keys) and validated row by row with the fields' own
+  schemas; an undeclared key is an error. `minItems` and `maxItems` bound the
+  list. The list carries `localized`, `required`, `access`, `label` and
+  `description`; a row holds `text`, `textarea`, `email`, `url`, `number`,
+  `boolean`, `date`, `select` and `multiselect` fields, and anything else — or
+  `localized`, `unique`, `index`, `access` on a row's field — is refused when
+  the configuration loads.
+
+  The panel edits a list in place: each row is a small form with the row's
+  fields, with buttons to move and remove it and one to add a row, at full
+  width in the property pane; the list view shows the number of rows. `GET
+/panel` describes the row as `fields` on the list's `PanelField`, the OpenAPI
+  document describes it as an object with its required keys, and the AI
+  assistant is told a row's fields (`rowFields`).
+
+  A refused write now says where the problem is when a field's value has
+  structure: `faq #2 question: is required` rather than the first message of
+  the array's schema. Messages for fields without structure are unchanged.
+
+### Patch Changes
+
+- 0b2ceac: **`relation(to, { many: true })` accepts the list of ids it stores.** The
+  column of a many relation is a JSON array and `depth` resolves it as one, but
+  the field validated its value as a single id (`z.string()`), so every write of
+  an array — from the panel's picker, the REST API or `cms.api` — was refused
+  with "expected string, received array", and a single id was accepted and
+  stored where a list belongs. The schema is now an array of non-empty ids
+  (nullable unless `required`), which is also what the OpenAPI document
+  describes, and the static type of the field is `string[]` instead of
+  `string`.
+
 ## 0.2.0
 
 ### Minor Changes
