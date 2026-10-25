@@ -62,10 +62,25 @@ can still restore is not an unused picture.
 
 **`on-demand` without a processor is a supported deployment**, not a
 misconfiguration: the original is served and its URL carries `?w=&h=&fit=&q=`
-for an image CDN to render at the edge. That is what the Cloudflare templates
-ship, because a Worker cannot load a native codec. `convert`, `maxDimensions`
-and `pregenerate` do need a processor, and say so while the configuration is
+for an image CDN to render at the edge. `convert`, `maxDimensions` and
+`pregenerate` do need a processor, and say so while the configuration is
 loading.
+
+## Processors
+
+Two ship with the package, one per kind of runtime:
+
+- **`sharpImages()`** — Node and Bun. `sharp` is an optional peer dependency,
+  imported the first time something asks for a pixel.
+- **`cloudflareImages(() => env.IMAGES)`** — Cloudflare Workers, where a
+  native codec can never load. The [Images binding](https://developers.cloudflare.com/images/transform-images/bindings/)
+  resizes and converts inside the runtime, so `convert: { to: "webp" }`,
+  `maxDimensions` and `pregenerate` work on a Worker exactly as they do on
+  Node. Add `"images": { "binding": "IMAGES" }` to `wrangler.json`; the
+  binding also exists in `wrangler dev`.
+
+`ImageProcessor` is one method, so a service of your own is an afternoon:
+`supports(contentType)` and `transform(bytes, transform, info)`.
 
 Only declared sizes can be requested. Arbitrary dimensions in a URL are how a
 stranger fills a bucket one pixel at a time.

@@ -1080,7 +1080,7 @@ function validateUploads(
     if (needs) {
       throw new CmsConfigError(
         "uploads.images.processor",
-        `${needs} has to render pixels, and nothing here can. Add a processor (sharpImages() from "@heyo-sh/heyo-cms/uploads"), or drop the option.`,
+        `${needs} has to render pixels, and nothing here can. Add a processor from "@heyo-sh/heyo-cms/uploads" (sharpImages() on Node, cloudflareImages() on Workers), or drop the option.`,
       );
     }
   }
