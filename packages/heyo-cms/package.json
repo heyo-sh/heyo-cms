@@ -1,6 +1,6 @@
 {
   "name": "@heyo-sh/heyo-cms",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-agnostic, TypeScript-first headless CMS with its own panel, RBAC, i18n, native AI and first-class media.",
   "keywords": [
     "cms",

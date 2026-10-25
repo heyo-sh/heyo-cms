@@ -1,6 +1,6 @@
 {
   "name": "@heyo-sh/heyo-cms-admin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The Heyo CMS admin panel: one bundle, served from the CMS handler itself.",
   "keywords": [
     "cms",
@@ -35,7 +35,7 @@
     }
   },
   "peerDependencies": {
-    "@heyo-sh/heyo-cms": "0.1.0"
+    "@heyo-sh/heyo-cms": "0.2.0"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "21.0.3",
