@@ -75,9 +75,12 @@ Two ship with the package, one per kind of runtime:
 - **`cloudflareImages(() => env.IMAGES)`** — Cloudflare Workers, where a
   native codec can never load. The [Images binding](https://developers.cloudflare.com/images/transform-images/bindings/)
   resizes and converts inside the runtime, so `convert: { to: "webp" }`,
-  `maxDimensions` and `pregenerate` work on a Worker exactly as they do on
-  Node. Add `"images": { "binding": "IMAGES" }` to `wrangler.json`; the
-  binding also exists in `wrangler dev`.
+  `maxDimensions`, `pregenerate` and the named sizes work on a Worker as they
+  do on Node. Add `"images": { "binding": "IMAGES" }` to `wrangler.json`.
+  `wrangler dev` simulates the binding locally, and the simulator resizes and
+  converts but does not apply a crop or a focal point (`trim` and `gravity`
+  coordinates are ignored there). Set `"remote": true` on the binding to see
+  them in development; it uses the real service and needs a Cloudflare login.
 
 `ImageProcessor` is one method, so a service of your own is an afternoon:
 `supports(contentType)` and `transform(bytes, transform, info)`.

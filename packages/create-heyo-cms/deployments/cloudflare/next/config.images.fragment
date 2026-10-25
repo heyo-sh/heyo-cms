@@ -5,8 +5,9 @@
  * resizes and converts inside the runtime, so `convert: { to: "webp" }` and
  * the named sizes are rendered here — on the Worker — the same way
  * `sharpImages()` renders them on Node. The binding is declared in
- * `wrangler.json` (`"images": { "binding": "IMAGES" }`) and exists in
- * `wrangler dev` too.
+ * `wrangler.json` (`"images": { "binding": "IMAGES" }`). `wrangler dev`
+ * simulates it locally and does not apply a crop or a focal point; add
+ * `"remote": true` to the binding to see those in development.
  *
  * Sizes are named rather than free: arbitrary dimensions in a URL are how a
  * stranger fills a bucket and burns CPU one pixel at a time.

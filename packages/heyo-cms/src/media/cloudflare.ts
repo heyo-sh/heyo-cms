@@ -15,7 +15,12 @@ import { sourceRegion } from "./sharp";
  * itself can resize and convert: `env.IMAGES` decodes and re-encodes inside
  * workerd, costs no subrequest to leave for, and exists in `wrangler dev`.
  * With it, `convert: { to: "webp" }`, `maxDimensions` and `pregenerate`
- * work on Workers exactly as they do on Node with `sharpImages()`.
+ * work on Workers as they do on Node with `sharpImages()`.
+ *
+ * `wrangler dev` simulates the binding locally, and the simulator ignores
+ * `trim` and `gravity` coordinates: resizing, fitting and conversion work, a
+ * crop or a focal point does not. `"remote": true` on the binding uses the
+ * real service instead.
  *
  * The binding is typed structurally, like the R2 and D1 ones, so this module
  * needs no SDK and loads on every runtime; it only refuses at transform time,

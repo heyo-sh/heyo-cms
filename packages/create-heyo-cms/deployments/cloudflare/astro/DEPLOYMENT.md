@@ -53,11 +53,16 @@ Workers have no codec, so the `images` block in `heyo-cms.config.ts` uses
 the [Images binding](https://developers.cloudflare.com/images/transform-images/bindings/)
 instead of `sharp`: `wrangler.json` declares `"images": { "binding": "IMAGES" }`,
 and the binding converts uploads to WebP and renders the named sizes inside
-the Worker — the same behaviour `sharpImages()` gives the Node deployments,
-in `wrangler dev` as well as in production. Transformations are billed per
-unique transform; drop `processor` and `convert` to go back to serving the
-original with the size in the URL for a CDN to render. EXIF is stripped
-either way: the engine does that itself, without a codec.
+the Worker, as `sharpImages()` does on the Node deployments. Transformations
+are billed per unique transform; drop `processor` and `convert` to go back to
+serving the original with the size in the URL for a CDN to render. EXIF is
+stripped either way: the engine does that itself, without a codec.
+
+`wrangler dev` simulates the binding locally. The simulator resizes and
+converts, but it ignores the crop and the focal point an editor sets in the
+panel, so a thumbnail is centred there. Add `"remote": true` to the `images`
+binding in `wrangler.json` to check them against the real service (it needs a
+Cloudflare login).
 
 ## The sweeps
 
