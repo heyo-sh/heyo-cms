@@ -289,7 +289,7 @@ export function heyoCms<
     _config: Object.freeze(resolved),
     schema,
     collections: config.collections,
-    handler: (request, options) => httpLayer().handler(request, options),
+    handler: (request: Request) => httpLayer().handler(request),
     _router: { routes: () => httpLayer().routes() },
     api: engine.buildApi() as unknown as LocalApi<TCollections>,
     globals: engine.buildGlobals() as unknown as GlobalsApi<TGlobals>,

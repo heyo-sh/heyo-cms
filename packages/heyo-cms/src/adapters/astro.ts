@@ -1,4 +1,4 @@
-import type { CmsHandler } from "../types/instance";
+import { boundWaitUntil, handle as respond, type HandlerLike, type WaitUntil } from "./deliver"; // prettier-ignore
 
 /**
  * Astro.
@@ -17,9 +17,7 @@ import type { CmsHandler } from "../types/instance";
  * and the reason the import path names the framework instead of a flag doing
  * it.
  */
-export interface HandlerLike {
-  handler: CmsHandler;
-}
+export type { HandlerLike } from "./deliver";
 
 /** The shape of what Astro passes an endpoint. */
 export interface AstroContextLike {
@@ -33,7 +31,7 @@ export interface AstroContextLike {
 
 export interface AstroHandlerOptions {
   /** For a platform whose `waitUntil` is not in `locals` (Vercel's, say). */
-  waitUntil?: (promise: Promise<unknown>) => void;
+  waitUntil?: WaitUntil;
 }
 
 export type AstroRoute = (context: AstroContextLike) => Promise<Response>;
@@ -53,10 +51,8 @@ export function cmsHandler(
   cms: HandlerLike,
   options: AstroHandlerOptions = {},
 ): AstroRouteHandlers {
-  const handle: AstroRoute = ({ request, locals }) => {
-    const waitUntil = options.waitUntil ?? cloudflareWaitUntil(locals);
-    return cms.handler(request, waitUntil ? { waitUntil } : undefined);
-  };
+  const handle: AstroRoute = ({ request, locals }) =>
+    respond(cms, request, options.waitUntil ?? cloudflareWaitUntil(locals));
   return {
     GET: handle,
     POST: handle,
@@ -75,18 +71,8 @@ export function cmsHandler(
  * `Astro.locals.cfContext.waitUntil` (Astro 6 and later), or the older
  * `locals.runtime.ctx.waitUntil`, bound to its context.
  */
-function cloudflareWaitUntil(
-  locals: unknown,
-): ((promise: Promise<unknown>) => void) | undefined {
+function cloudflareWaitUntil(locals: unknown): WaitUntil | undefined {
   const value = locals as
-    | {
-        cfContext?: { waitUntil?: (promise: Promise<unknown>) => void };
-        runtime?: {
-          ctx?: { waitUntil?: (promise: Promise<unknown>) => void };
-        };
-      }
-    | undefined;
-  const context = value?.cfContext ?? value?.runtime?.ctx;
-  const waitUntil = context?.waitUntil;
-  return typeof waitUntil === "function" ? waitUntil.bind(context) : undefined;
+    { cfContext?: unknown; runtime?: { ctx?: unknown } } | undefined;
+  return boundWaitUntil(value?.cfContext ?? value?.runtime?.ctx);
 }

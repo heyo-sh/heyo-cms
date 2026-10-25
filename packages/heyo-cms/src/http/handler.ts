@@ -87,18 +87,7 @@ export function createCmsHttp(cms: CmsInstance): CmsHttp {
   const before = sortHooks(config.hooks?.before ?? []);
   const after = sortHooks(config.hooks?.after ?? []);
 
-  const handler: CmsHandler = async (request, options) => {
-    const response = await handle(request);
-    // A write's events are delivered after the response on a runtime that
-    // would otherwise freeze first. Reads have nothing to deliver, and a
-    // drain costs a query, so only the methods that write ask for one.
-    if (options?.waitUntil && !safeMethods.has(request.method)) {
-      options.waitUntil(cms.drainEvents().catch(() => 0));
-    }
-    return response;
-  };
-
-  const handle = async (request: Request): Promise<Response> => {
+  const handler: CmsHandler = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const path = stripBasePath(url.pathname, basePath);
 
@@ -182,8 +171,6 @@ export function createCmsHttp(cms: CmsInstance): CmsHttp {
     openapi,
   };
 }
-
-const safeMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
 interface DispatchOptions {
   cms: CmsInstance;

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 
 import { cmsHandler as astroHandler } from "../src/adapters/astro";
+import { cmsHandler as nextHandler } from "../src/adapters/next";
 import { defineCollection, heyoCms, systemActor } from "../src/config";
 import { sqlite } from "../src/db/sqlite";
 import { richTextToHtml } from "../src/editor";
@@ -452,6 +453,20 @@ describe("plugins: root routes, events and waitUntil", () => {
       locals: { cfContext: { waitUntil: (p: Promise<unknown>) => waited.push(p) } }, // prettier-ignore
     });
     expect(waited).toHaveLength(1);
+
+    // Next: passed in, since Next has no context of its own to find it in.
+    const next = nextHandler(cms, { waitUntil: (p) => waited.push(p) });
+    const created = await next.POST(
+      new Request("https://site.test/api/heyo-cms/posts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: { title: "Again" } }),
+      }),
+    );
+    expect(created.status).toBe(201);
+    expect(waited).toHaveLength(2);
+    await Promise.all(waited);
+    expect(seen).toHaveLength(2);
     await cms.close();
   });
 });

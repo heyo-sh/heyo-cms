@@ -1,4 +1,4 @@
-import type { CmsHandler } from "../types/instance";
+import { boundWaitUntil, handle as respond, type HandlerLike, type WaitUntil } from "./deliver"; // prettier-ignore
 
 /**
  * React Router (and Remix).
@@ -15,9 +15,7 @@ import type { CmsHandler } from "../types/instance";
  * and everything else through `action`, so the CMS needs both and the method
  * dispatch happens inside the handler where it already lives.
  */
-export interface HandlerLike {
-  handler: CmsHandler;
-}
+export type { HandlerLike } from "./deliver";
 
 export interface DataFunctionArgs {
   request: Request;
@@ -30,7 +28,7 @@ export interface DataFunctionArgs {
 
 export interface ReactRouterHandlerOptions {
   /** For a platform whose `waitUntil` is not in the load context. */
-  waitUntil?: (promise: Promise<unknown>) => void;
+  waitUntil?: WaitUntil;
 }
 
 export type DataFunction = (args: DataFunctionArgs) => Promise<Response>;
@@ -44,16 +42,12 @@ export function cmsHandler(
   cms: HandlerLike,
   options: ReactRouterHandlerOptions = {},
 ): ReactRouterRouteHandlers {
-  const handle: DataFunction = ({ request, context }) => {
-    const ctx = (
-      context as
-        | { cloudflare?: { ctx?: { waitUntil?: (promise: Promise<unknown>) => void } } } // prettier-ignore
-        | undefined
-    )?.cloudflare?.ctx;
-    const waitUntil =
+  const handle: DataFunction = ({ request, context }) =>
+    respond(
+      cms,
+      request,
       options.waitUntil ??
-      (typeof ctx?.waitUntil === "function" ? ctx.waitUntil.bind(ctx) : undefined); // prettier-ignore
-    return cms.handler(request, waitUntil ? { waitUntil } : undefined);
-  };
+        boundWaitUntil((context as { cloudflare?: { ctx?: unknown } } | undefined)?.cloudflare?.ctx), // prettier-ignore
+    );
   return { loader: handle, action: handle };
 }

@@ -71,7 +71,7 @@ export const cms = heyoCms({
 ## What the instance gives back
 
 ```ts
-cms.handler; // (request, { waitUntil }?) => Promise<Response> — the whole HTTP surface
+cms.handler; // (request: Request) => Promise<Response> — the whole HTTP surface
 cms.api; // the local API, typed from `collections`
 cms.globals; // the singletons
 cms.auth; // sessions, invitations, API keys, roles
