@@ -11,6 +11,3 @@ stored where a list belongs. The schema is now an array of non-empty ids
 (nullable unless `required`), which is also what the OpenAPI document
 describes, and the static type of the field is `string[]` instead of
 `string`.
-
-Projects that worked around it by replacing the field's `schema` can go back
-to `relation(to, { many: true })`.
