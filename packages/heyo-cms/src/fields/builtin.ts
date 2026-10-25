@@ -383,6 +383,13 @@ export interface SlugOptions extends FieldOptions {
   history?: boolean;
   /** The longest slug produced; longer input is cut at a hyphen. 96 by default. */
   maxLength?: number;
+  /**
+   * Your own transliteration, when the built-in one is not the house style:
+   * `&` as `and`, a language's own rules. Used everywhere a slug is made or
+   * cleaned — writes, the Generate button, previous slugs. Its output must
+   * still match `slugPattern`; `maxLength` is then yours to apply.
+   */
+  slugify?: (text: string) => string;
   default?: string;
 }
 
@@ -392,6 +399,7 @@ const slugBuilder = defineField<string, SlugOptions>({
     from: z.string().min(1).optional(),
     history: z.boolean().optional(),
     maxLength: z.number().int().min(8).max(512).optional(),
+    slugify: z.function().optional(),
     default: z.string().optional(),
   }) as unknown as z.ZodType<SlugOptions>,
   schema: (options) =>
@@ -430,6 +438,10 @@ export function slug<const TOptions extends SlugOptions>(
   const localized = given.localized === true;
   const max = given.maxLength;
   const from = given.from;
+  const clean =
+    given.slugify ??
+    ((text: string) =>
+      slugify(text, max === undefined ? {} : { maxLength: max }));
   return slugBuilder({
     ...given,
     // A localized field cannot carry a unique index (one index cannot cover
@@ -441,10 +453,7 @@ export function slug<const TOptions extends SlugOptions>(
       ? {
           generate: ({ fields }: { fields: JsonObject }) => {
             const source = fields[from];
-            const made =
-              typeof source === "string"
-                ? slugify(source, max === undefined ? {} : { maxLength: max })
-                : "";
+            const made = typeof source === "string" ? clean(source) : "";
             return made === "" ? null : made;
           },
         }

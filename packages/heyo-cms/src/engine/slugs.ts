@@ -34,6 +34,15 @@ export interface SlugFieldOptions {
   history?: boolean;
   unique?: boolean;
   maxLength?: number;
+  slugify?: (text: string) => string;
+}
+
+/** The field's own `slugify`, or the built-in one at its `maxLength`. */
+export function slugCleaner(field: FieldDefinition): (text: string) => string {
+  const settings = slugOptions(field);
+  if (typeof settings.slugify === "function") return settings.slugify;
+  const max = settings.maxLength;
+  return (text) => slugify(text, max === undefined ? {} : { maxLength: max });
 }
 
 export function slugFields(
@@ -89,9 +98,7 @@ export async function prepareSlugs(
     const locale = field.localized ? options.locale : "";
     const current = ownValue(options.stored, name, field, options.locale);
     const given = input[name];
-    const max = settings.maxLength;
-    const clean = (value: string) =>
-      slugify(value, max === undefined ? {} : { maxLength: max });
+    const clean = slugCleaner(field);
 
     let next: string | null | undefined;
     if (typeof given === "string" && given.trim() !== "") {
@@ -240,16 +247,17 @@ function hasHistory(scope: SlugScope): boolean {
 export async function assertFree(
   scope: SlugScope & { slug: string },
 ): Promise<void> {
+  const where = scope.locale ? ` in "${scope.locale}"` : "";
   const owner = await currentOwner(scope, scope.slug);
   if (owner !== null) {
     throw CmsError.conflict(
-      `The slug "${scope.slug}" is already used by ${scope.collection.name} ${owner}${scope.locale ? ` in "${scope.locale}"` : ""}.`,
+      `The slug "${scope.slug}" is already used${where} by another document of ${scope.collection.label} (${owner}).`,
     );
   }
   const previous = await historyOwner(scope, scope.slug);
   if (previous !== null) {
     throw CmsError.conflict(
-      `The slug "${scope.slug}" is a previous address of ${scope.collection.name} ${previous} and redirects there. Remove it from that document's previous slugs first.`,
+      `The slug "${scope.slug}" is a previous slug of another document of ${scope.collection.label} (${previous})${where} and redirects there. Remove it from that document's previous slugs first.`,
     );
   }
 }

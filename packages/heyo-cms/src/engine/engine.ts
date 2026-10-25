@@ -84,11 +84,11 @@ import {
   releaseSlugs,
   removePreviousSlugRow,
   slugCandidates,
+  slugCleaner,
   slugFields,
   slugOptions,
   type SlugMove,
 } from "./slugs";
-import { slugify } from "../slugify";
 import { listTrashed } from "./trash";
 
 const defaultLimit = 25;
@@ -468,14 +468,7 @@ export class CmsEngine {
     const locale = localeContext(this.options.config, args);
     const actor = args.actor ?? null;
     const scopeLocale = definition.localized ? locale.locale : "";
-    const slug =
-      change === "add"
-        ? slugify(args.slug, {
-            ...(slugOptions(definition).maxLength === undefined
-              ? {}
-              : { maxLength: slugOptions(definition).maxLength as number }),
-          })
-        : args.slug;
+    const slug = change === "add" ? slugCleaner(definition)(args.slug) : args.slug; // prettier-ignore
     if (slug === "") {
       throw CmsError.validation(`"${args.slug}" has no letters or digits to make a slug from`); // prettier-ignore
     }

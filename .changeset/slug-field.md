@@ -11,7 +11,7 @@ slug: slug({ from: "title", localized: true, history: true });
 
 Made from `from` once while empty (retitling never moves it), cleaned when
 typed (`"Łódź & Kraków"` → `lodz-krakow`, with Latin, Cyrillic and Greek
-transliterated), unique per language — trashed documents included — with
+transliterated, or by a `slugify` of your own), unique per language — trashed documents included — with
 `-2`, `-3` suffixes when generated and a `409` when typed. With `history`, a
 slug a document stops using becomes a previous address in the new
 `slug_history` table (`heyo-cms generate` adds it only for configurations that

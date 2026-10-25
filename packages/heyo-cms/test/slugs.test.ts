@@ -108,7 +108,7 @@ function runSlugSuite(entry: EngineUnderTest): void {
 
       await expect(
         cms.api.posts.update({ id: String(second!.id), data: { slug: "hello" }, actor }), // prettier-ignore
-      ).rejects.toThrow(/already used by posts/);
+      ).rejects.toThrow(/already used in "en" by another document of Posts/);
 
       // Another language is another address space.
       const polish = await cms.api.posts.update({
@@ -167,7 +167,9 @@ function runSlugSuite(entry: EngineUnderTest): void {
       expect(other?.slug).toBe("old-name-2");
       await expect(
         cms.api.posts.update({ id: String(other!.id), data: { slug: "old-name" }, actor }), // prettier-ignore
-      ).rejects.toThrow(/previous address of posts .* Remove it/);
+      ).rejects.toThrow(
+        /previous slug of another document of Posts .* Remove it/,
+      );
 
       // Moving back is not a redirect to itself.
       await cms.api.posts.update({ id, data: { slug: "old-name" }, actor });
@@ -321,6 +323,35 @@ describe("slug configuration", () => {
     expect((await cms.api.posts.resolveSlug("moved"))?.id).toBe(String(a!.id));
     expect(await cms.api.posts.resolveSlug("same")).toBeNull();
     await expect(cms.api.posts.previousSlugs({ id: String(a!.id) })).rejects.toThrow(/no slug field with history/); // prettier-ignore
+    await cms.close();
+  });
+
+  test("a house style replaces the built-in transliteration everywhere", async () => {
+    const adapter = sqlite(new Database(":memory:"));
+    const house = (text: string) =>
+      slugify(text.replace(/&/g, " and "), { maxLength: 20 });
+    const cms = heyoCms({
+      database: () => adapter,
+      collections: {
+        posts: defineCollection({
+          fields: {
+            title: text({}),
+            slug: slug({ from: "title", history: true, slugify: house }),
+          },
+        }),
+      },
+    });
+    adapter.useSchema(cms.schema);
+    await adapter.applyMigration(
+      adapter.render(adapter.plan(emptySnapshot(), cms.schema), "0000_house"),
+    );
+    const post = await cms.api.posts.create({ data: { title: "Łódź & Kraków" }, actor }); // prettier-ignore
+    expect(post?.slug).toBe("lodz-and-krakow");
+    const typed = await cms.api.posts.update({ id: String(post!.id), data: { slug: "Salt & Pepper" }, actor }); // prettier-ignore
+    expect(typed?.slug).toBe("salt-and-pepper");
+    const added = await cms.api.posts.addPreviousSlug({ id: String(post!.id), slug: "Bread & Butter", actor }); // prettier-ignore
+    expect(added.map((entry) => entry.slug).sort()).toEqual(["bread-and-butter", "lodz-and-krakow"]); // prettier-ignore
+    expect(await slug({ from: "title", slugify: house }).generate?.({ fields: { title: "A & B" }, locale: "en" })).toBe("a-and-b"); // prettier-ignore
     await cms.close();
   });
 

@@ -95,7 +95,9 @@ fields: {
   same function on the draft.
 - **Cleaned when typed.** `"  Kraków & Łódź!! "` is stored as `krakow-lodz`.
   Latin accents, Cyrillic and Greek are transliterated to ASCII, so a link
-  never turns into `%D0%B1…` in a chat.
+  never turns into `%D0%B1…` in a chat. A house style of your own — `&` as
+  `and`, a language's own rules — is `slug({ slugify: (text) => … })`, used
+  everywhere a slug is made or cleaned.
 - **Unique per language.** A localized field cannot carry a database index
   (one index cannot cover languages that do not exist yet), so the engine
   checks it instead — against every document of the collection, trashed ones
