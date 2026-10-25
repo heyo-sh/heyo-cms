@@ -5,6 +5,7 @@ import { defineCollection, heyoCms } from "../src/config";
 import { sqlite } from "../src/db/sqlite";
 
 import { CmsConfigError } from "../src/errors";
+import type { FieldDefinition } from "../src/types/fields";
 import {
   boolean,
   date,
@@ -54,6 +55,35 @@ describe("field builders", () => {
     expect(tags.column).toMatchObject({ type: "json", array: true });
     expect(tags.schema.safeParse(["a", "b"]).success).toBe(true);
     expect(tags.schema.safeParse(["c"]).success).toBe(false);
+  });
+
+  test("a many relation validates the list of ids it stores", () => {
+    const one = relation("authors");
+    expect(one.column.type).toBe("text");
+    expect(one.schema.safeParse("aut_1").success).toBe(true);
+    expect(one.schema.safeParse(["aut_1"]).success).toBe(false);
+
+    const many = relation("authors", { many: true });
+    expect(many.column).toMatchObject({ type: "json", array: true });
+    expect(many.schema.safeParse(["aut_1", "aut_2"]).success).toBe(true);
+    expect(many.schema.safeParse([]).success).toBe(true);
+    expect(many.schema.safeParse(null).success).toBe(true);
+    // A single id is not a list, and a list holds ids.
+    expect(many.schema.safeParse("aut_1").success).toBe(false);
+    expect(many.schema.safeParse([""]).success).toBe(false);
+    expect(many.schema.safeParse([1]).success).toBe(false);
+
+    const required = relation("authors", { many: true, required: true });
+    expect(required.schema.safeParse(null).success).toBe(false);
+    expect(required.schema.safeParse(["aut_1"]).success).toBe(true);
+
+    // The static type says the same as the schema (checked by `tsc`).
+    type Value<F> = F extends FieldDefinition<infer T> ? T : never;
+    const ids: Value<typeof many> = ["aut_1", "aut_2"];
+    // @ts-expect-error a many relation holds a list, not one id
+    const single: Value<typeof many> = "aut_1";
+    const id: Value<typeof one> = "aut_1";
+    expect([ids, single, id]).toHaveLength(3);
   });
 
   test("slug is unique and indexed, per language when localized", () => {
