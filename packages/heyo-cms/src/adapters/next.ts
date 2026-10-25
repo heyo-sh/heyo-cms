@@ -1,4 +1,4 @@
-import type { CmsHandler } from "../types/instance";
+import { handle as respond, type HandlerLike, type WaitUntil } from "./deliver";
 
 /**
  * Next.js App Router.
@@ -16,22 +16,41 @@ import type { CmsHandler } from "../types/instance";
  * small because the handler is already `Request → Response`, which is exactly
  * what a Next.js route handler is.
  */
-export interface HandlerLike {
-  handler: CmsHandler;
-}
+export type { HandlerLike } from "./deliver";
+
+/**
+ * One route handler, as Next.js calls it.
+ *
+ * Only the request: Next passes `{ params }` as the second argument, and a
+ * handler typed to accept anything else there fails Next's own route type
+ * check at build time.
+ */
+export type NextRoute = (request: Request) => Promise<Response>;
 
 export interface NextRouteHandlers {
-  GET: CmsHandler;
-  POST: CmsHandler;
-  PATCH: CmsHandler;
-  PUT: CmsHandler;
-  DELETE: CmsHandler;
-  HEAD: CmsHandler;
-  OPTIONS: CmsHandler;
+  GET: NextRoute;
+  POST: NextRoute;
+  PATCH: NextRoute;
+  PUT: NextRoute;
+  DELETE: NextRoute;
+  HEAD: NextRoute;
+  OPTIONS: NextRoute;
 }
 
-export function cmsHandler(cms: HandlerLike): NextRouteHandlers {
-  const handle: CmsHandler = (request) => cms.handler(request);
+export interface NextHandlerOptions {
+  /**
+   * `waitUntil` from `@vercel/functions`, or a function that reaches
+   * OpenNext's `getCloudflareContext().ctx.waitUntil`: delivers a write's
+   * events before the function is frozen.
+   */
+  waitUntil?: WaitUntil;
+}
+
+export function cmsHandler(
+  cms: HandlerLike,
+  options: NextHandlerOptions = {},
+): NextRouteHandlers {
+  const handle: NextRoute = (request) => respond(cms, request, options.waitUntil); // prettier-ignore
   return {
     GET: handle,
     POST: handle,

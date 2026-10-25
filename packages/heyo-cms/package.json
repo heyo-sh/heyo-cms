@@ -153,6 +153,10 @@
       "types": "./dist/webhooks.d.ts",
       "default": "./dist/webhooks.js"
     },
+    "./plugins": {
+      "types": "./dist/plugins.d.ts",
+      "default": "./dist/plugins.js"
+    },
     "./jobs": {
       "types": "./dist/jobs.d.ts",
       "default": "./dist/jobs.js"
@@ -177,7 +181,7 @@
   "scripts": {
     "dev": "bun run build --watch",
     "build": "rm -rf dist && bun run build:core && bun run build:types",
-    "build:core": "bun build src/index.ts src/types.ts src/config.ts src/fields.ts src/schema.ts src/query.ts src/migrations.ts src/auth.ts src/uploads.ts src/editor.ts src/ai.ts src/webhooks.ts src/jobs.ts src/http.ts src/client.ts src/content.ts src/telemetry.ts src/cli.ts src/adapters/next.ts src/adapters/astro.ts src/adapters/react-router.ts src/adapters/sveltekit.ts src/adapters/nuxt.ts src/db/postgres.ts src/db/sqlite.ts src/db/d1.ts src/db/mongodb.ts --outdir dist --root src --target node --production --splitting --external zod --external pg --external mongodb --external sharp --external @mariozechner/pi-ai --external @mariozechner/pi-agent-core --external typebox",
+    "build:core": "bun build src/index.ts src/types.ts src/config.ts src/fields.ts src/schema.ts src/query.ts src/migrations.ts src/auth.ts src/uploads.ts src/editor.ts src/ai.ts src/webhooks.ts src/plugins.ts src/jobs.ts src/http.ts src/client.ts src/content.ts src/telemetry.ts src/cli.ts src/adapters/next.ts src/adapters/astro.ts src/adapters/react-router.ts src/adapters/sveltekit.ts src/adapters/nuxt.ts src/db/postgres.ts src/db/sqlite.ts src/db/d1.ts src/db/mongodb.ts --outdir dist --root src --target node --production --splitting --external zod --external pg --external mongodb --external sharp --external @mariozechner/pi-ai --external @mariozechner/pi-agent-core --external typebox",
     "build:types": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "bun test"

@@ -122,7 +122,47 @@ export function systemTables(): TableSnapshot[] {
 
 /** Names the engine reserves; a collection cannot take one of them. */
 export function systemTableNames(): string[] {
-  return [migrationsTable, ...systemTables().map((entry) => entry.name)].sort();
+  return [
+    migrationsTable,
+    // Reserved whether or not this deployment has it: a collection called
+    // `slug_history` would collide the day somebody turns `history` on.
+    slugHistoryTableName,
+    ...systemTables().map((entry) => entry.name),
+  ].sort();
+}
+
+const slugHistoryTableName = "slug_history";
+
+/**
+ * Previous addresses of documents, for `slug({ history: true })`.
+ *
+ * Not in `systemTables()`: only a configuration that keeps slug history gets
+ * it, so every other project's next migration stays empty. One row per
+ * address a document used to have; the unique index is the rule that an
+ * address leads to one place.
+ */
+export function slugHistoryTableSnapshot(): TableSnapshot {
+  return table(
+    slugHistoryTableName,
+    [
+      id(),
+      column("collection", "text", { nullable: false }),
+      column("field", "text", { nullable: false }),
+      // Empty rather than null, as in `media_usages`: uniqueness must not
+      // depend on how an engine treats nulls in a unique index.
+      column("locale", "text", { nullable: false, default: "" }),
+      column("slug", "text", { nullable: false }),
+      column("document_id", "text", { nullable: false }),
+      createdAt(),
+    ],
+    [
+      index(slugHistoryTableName, ["collection", "field", "locale", "slug"], {
+        unique: true,
+        name: "uniq_slug_history_address",
+      }),
+      index(slugHistoryTableName, ["document_id"]),
+    ],
+  );
 }
 
 function documentsTable(): TableSnapshot {

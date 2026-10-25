@@ -39,6 +39,13 @@ export {
 } from "./storage/sign";
 export { sharpImages, type SharpImagesOptions } from "./media/sharp";
 export {
+  cloudflareImages,
+  type CloudflareImageOutput,
+  type CloudflareImagesBinding,
+  type CloudflareImagesSource,
+  type CloudflareImageTransformer,
+} from "./media/cloudflare";
+export {
   extensionFor,
   imageContentType,
   probeImage,

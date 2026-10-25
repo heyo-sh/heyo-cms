@@ -57,6 +57,7 @@ text({
 | `multiselect` | an array of options  | `minItems`, `maxItems`                    |
 | `media`       | a `media` row id     | `accept` — a hint for the picker          |
 | `relation`    | an id, or ids        | `relation("authors", { many: true })`     |
+| `slug`        | a URL slug           | `from`, `history`, `maxLength`            |
 | `json`        | anything JSON        | use `defineField()` for custom validation |
 | `seoFields()` | four fields at once  | spread into `fields`                      |
 
@@ -75,44 +76,89 @@ None of these options is access control.
 
 ## Slugs
 
-There is no `slug` type. A URL handle is a `text` field with the constraints
-you actually want on it:
+`slug()` is a URL handle the engine looks after, on every write path — the
+panel, the REST API, an import, a scheduled change, a script:
+
+```ts
+import { slug, text } from "@heyo-sh/heyo-cms/fields";
+
+fields: {
+  title: text({ required: true, localized: true }),
+  slug: slug({ from: "title", localized: true, history: true }),
+}
+```
+
+- **Made once.** While a document has no slug in a language, the first write
+  with a `title` makes one: `"Łódź in Autumn"` becomes `lodz-in-autumn`, and
+  `lodz-in-autumn-2` when that is taken. Retitling never moves it; clearing
+  it (`slug: null`) makes it again. The panel shows a button that runs the
+  same function on the draft.
+- **Cleaned when typed.** `"  Kraków & Łódź!! "` is stored as `krakow-lodz`.
+  Latin accents, Cyrillic and Greek are transliterated to ASCII, so a link
+  never turns into `%D0%B1…` in a chat. A house style of your own — `&` as
+  `and`, a language's own rules — is `slug({ slugify: (text) => … })`, used
+  everywhere a slug is made or cleaned.
+- **Unique per language.** A localized field cannot carry a database index
+  (one index cannot cover languages that do not exist yet), so the engine
+  checks it instead — against every document of the collection, trashed ones
+  included, so restoring a page never collides. A typed slug that is taken is
+  a `409`. A field that is not localized also gets a unique index.
+  `unique: false` turns all of this off.
+- **Remembered, with `history: true`.** A slug a document stops using becomes
+  one of its _previous slugs_, kept in the `slug_history` table (which
+  `heyo-cms generate` adds). Nobody else may take it, and it goes when the
+  document is purged.
+
+Finding a document by a slug from a URL — now or before:
+
+```ts
+const hit = await cms.api.posts.resolveSlug(params.slug, { locale: "pl" });
+if (!hit) return notFound();
+if (!hit.current || hit.locale !== "pl") {
+  // An old address, or a slug from another language: redirect to the
+  // document's slug now, in the language of the page.
+  return redirect(`/pl/blog/${hit.document.slug}`, 301);
+}
+```
+
+The best match wins: a current slug in the requested language, then in
+another language, then a previous slug — in the requested language first.
+The document is read with the caller's access, in the requested locale, so a
+draft a visitor may not read resolves to nothing.
+
+Merging two pages is deleting the old page for good, then adding its slug to
+the one that stays — while the old page exists, even in the trash, its slug is
+still its own:
+
+```ts
+await cms.api.posts.purge({ id: old.id });
+await cms.api.posts.addPreviousSlug({ id: kept.id, slug: "old-post", locale: "en" }); // prettier-ignore
+await cms.api.posts.previousSlugs({ id: kept.id }); // newest first
+await cms.api.posts.removePreviousSlug({ id: kept.id, slug: "old-post", locale: "en" }); // prettier-ignore
+```
+
+Over HTTP: `GET /<collection>/resolve-slug?slug=…&locale=…`, and
+`GET`/`POST`/`DELETE /<collection>/<id>/previous-slugs`. The panel lists a
+document's previous slugs under the field and lets an editor add and remove
+them. `slugify()`, `isSlug()` and `slugPattern` are exported from
+`@heyo-sh/heyo-cms/fields` for code that builds URLs itself.
+
+A plain `text` field with a pattern is still the right choice for a handle
+that is not a URL, or one you would rather fill in a hook of your own:
 
 ```ts
 handle: text({
   unique: true,
   pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
   generate: ({ fields }) => slugify(String(fields.title ?? "")),
-  aiGenerate: {
-    label: "Suggest slug with AI",
-    prompt: "Suggest a short URL handle from the title.",
-    context: ["title"],
-  },
 });
 ```
 
 `generate` is a **server-side function**, called by a button beside the field
 using the current draft. `fields` contains readable sibling values in the
 current locale. Its result is validated against the target field schema,
-inserted into the form, and is **not saved** until the editor saves. The second
-button (`aiGenerate`) uses AI and shows a preview first. Both can coexist.
-Neither sends a server function to the browser. A generated slug still needs a
-save to check `unique` against the database.
-
-If the value must always be produced, even for CLI/import/API writes that do
-not press a form button, use a [hook](./hooks.mdx) instead:
-
-```ts
-databaseHooks: {
-  posts: {
-    create: {
-      before: async ({ data }) => ({
-        data: { ...data, handle: data.handle ?? slugify(data.title) },
-      }),
-    },
-  },
-}
-```
+inserted into the form, and is **not saved** until the editor saves. An
+`aiGenerate` button can sit beside it; it uses AI and shows a preview first.
 
 ## Your own field
 

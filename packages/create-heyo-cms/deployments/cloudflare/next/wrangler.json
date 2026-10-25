@@ -8,6 +8,7 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "images": { "binding": "IMAGES" },
   "kv_namespaces": [{ "binding": "NEXT_INC_CACHE_KV", "id": "local" }],
   "durable_objects": {
     "bindings": [

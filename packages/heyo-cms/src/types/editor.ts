@@ -67,6 +67,30 @@ export interface NodeSerializerContext {
    * resolve a file is expected to fall back to whatever `src` it carries.
    */
   mediaUrl?: (id: string) => string | null;
+  /**
+   * Resolves a media id to everything an `<img>` needs, when the caller
+   * knows the file: its URL, its dimensions, a `srcset`. Preferred over
+   * `mediaUrl` when both are given. See `cms.media.renderRichText()`.
+   */
+  mediaImage?: (id: string) => RichTextMediaImage | null;
+  /** Attributes every rendered image gets; see `RenderRichTextOptions.images`. */
+  images?: RichTextImageOptions;
+}
+
+/** A library file, resolved for an `<img>`. Null fields are left out of the tag. */
+export interface RichTextMediaImage {
+  src: string;
+  width?: number | null;
+  height?: number | null;
+  srcset?: string | null;
+  sizes?: string | null;
+  /** The library's alt text, used when the node has none of its own. */
+  alt?: string | null;
+}
+
+export interface RichTextImageOptions {
+  loading?: "lazy" | "eager";
+  decoding?: "async" | "sync" | "auto";
 }
 
 export type NodeSerializer = (context: NodeSerializerContext) => string;
@@ -122,6 +146,10 @@ export type RichTextFormat = "html" | "markdown" | "text";
 export interface RenderRichTextOptions {
   format: RichTextFormat;
   mediaUrl?: (id: string) => string | null;
+  /** Resolves a media id to a full image description; wins over `mediaUrl`. */
+  mediaImage?: (id: string) => RichTextMediaImage | null;
+  /** `loading` and `decoding` for every image. Nothing is added when omitted. */
+  images?: RichTextImageOptions;
 }
 
 /** The node and mark registry, as `cms.inspect()` and the panel read it. */

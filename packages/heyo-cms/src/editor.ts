@@ -17,6 +17,8 @@ export type {
   RenderRichTextOptions,
   RichTextDocument,
   RichTextFormat,
+  RichTextImageOptions,
   RichTextMark,
+  RichTextMediaImage,
   RichTextNode,
 } from "./types/editor";

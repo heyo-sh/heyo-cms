@@ -1,6 +1,7 @@
 import type { Actor } from "./actor";
 import type { CollectionDefinition } from "./config";
 import type { DatabaseAdapter } from "./database";
+import type { AnyEventType, CmsEventListener } from "./events";
 import type { FieldsConfig } from "./fields";
 import type {
   CollectionDatabaseHooks,
@@ -82,8 +83,19 @@ export interface OpenApiRouteSpec {
 
 export interface RouteDefinition {
   method: RouteMethod;
-  /** Relative to `basePath`, e.g. `/analytics/pageviews`. */
+  /** Relative to `basePath`, e.g. `/analytics/pageviews`; absolute with `root`. */
   path: string;
+  /**
+   * Matched against the whole URL path instead of below `basePath`.
+   *
+   * For the files a site has to serve at a fixed address — a verification
+   * file at `/<key>.txt`, the public media path — which a crawler fetches
+   * from the root and nothing can move. The application mounts the CMS
+   * handler on that path too; a request that never reaches the handler is
+   * never answered. Root routes are public: no actor is resolved and the
+   * HTTP hooks do not run, because they serve files, not the API.
+   */
+  root?: boolean;
   handler: (context: RouteContext) => Response | Promise<Response>;
   middleware?: ((
     context: RouteContext,
@@ -186,6 +198,16 @@ export interface CmsPlugin<Ext = Record<string, never>> {
   migrations?: PluginMigration[];
   extendCollections?: (context: PluginContext) => CollectionPatch[];
   hooks?: HookRegistration[];
+  /**
+   * Listeners for committed events, as `cms.on()` would register them.
+   *
+   * The place for a side effect that must not happen unless the write did:
+   * a ping to a search engine, a cache purge, a message. Delivered from the
+   * outbox after the commit — never for a rolled back write, retried with
+   * backoff when a listener throws — so a listener must tolerate seeing an
+   * event twice (`event.id` is stable). `"*"` receives every event.
+   */
+  events?: Partial<Record<AnyEventType, CmsEventListener>>;
   /** Registered under `basePath` automatically, exactly like core routes. */
   routes?: RouteDefinition[];
   client?: ClientExtension<Ext>;

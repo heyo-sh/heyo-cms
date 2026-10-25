@@ -6,6 +6,7 @@ import { useId } from "react";
 import { usePanel } from "../lib/panel";
 import { FieldActions } from "./field-actions";
 import { FieldInput } from "./field-input";
+import { PreviousSlugsFor } from "./slug-field";
 
 /**
  * The form, generated from the collection's fields.
@@ -257,6 +258,9 @@ export function FieldRow({
               value={document[field.name]}
               document={document}
               disabled={readOnly}
+              collection={aiPrefix(collection)}
+              {...(documentId ? { documentId } : {})}
+              locale={locale}
               onChange={(next) => onChange(field.name, next)}
             />
           </div>
@@ -281,6 +285,13 @@ export function FieldRow({
             {error}
           </Text>
         ) : null}
+        <PreviousSlugsFor
+          field={field}
+          collection={aiPrefix(collection)}
+          documentId={documentId}
+          locale={locale}
+          disabled={readOnly}
+        />
       </div>
     </div>
   );

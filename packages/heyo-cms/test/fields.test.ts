@@ -18,6 +18,7 @@ import {
   richText,
   select,
   seoFields,
+  slug,
   text,
 } from "../src/fields";
 
@@ -55,8 +56,25 @@ describe("field builders", () => {
     expect(tags.schema.safeParse(["c"]).success).toBe(false);
   });
 
-  // There is no `slug` type: a handle is a `text` field with the constraints
-  // spelled out, and nothing in the engine derives one field from another.
+  test("slug is unique and indexed, per language when localized", () => {
+    const handle = slug({ from: "title" });
+    expect(handle.type).toBe("slug");
+    expect(handle.column).toMatchObject({ type: "text", unique: true, index: true }); // prettier-ignore
+    expect(handle.schema.safeParse("hello-world").success).toBe(true);
+    expect(handle.schema.safeParse("Hello World").success).toBe(false);
+    expect(handle.schema.safeParse("double--dash").success).toBe(false);
+    expect(handle.generate).toBeDefined();
+    // No index can cover languages that do not exist yet; the engine checks
+    // uniqueness per language instead, so this is not the v1 refusal below.
+    const localized = slug({ localized: true, history: true });
+    expect(localized.column.unique).toBeUndefined();
+    expect(localized.options.history).toBe(true);
+    expect(slug({ unique: false }).column.unique).toBe(false);
+    expect(slug({ maxLength: 10 }).schema.safeParse("a-b-c-d-e-f").success).toBe(false); // prettier-ignore
+  });
+
+  // A plain handle without the engine's help is still a `text` field with
+  // the constraints spelled out.
   test("a handle is text with unique, index and a pattern", () => {
     const handle = text({
       required: true,

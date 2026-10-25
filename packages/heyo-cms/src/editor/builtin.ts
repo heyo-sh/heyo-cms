@@ -1,4 +1,8 @@
-import type { EditorMarkDefinition, EditorNodeDefinition } from "../types/editor"; // prettier-ignore
+import type {
+  EditorMarkDefinition,
+  EditorNodeDefinition,
+  RichTextMediaImage,
+} from "../types/editor";
 import { defineEditorMark, defineEditorNode } from "./registry";
 import {
   escapeHtml,
@@ -180,18 +184,29 @@ export const imageNode: EditorNodeDefinition = defineEditorNode({
     title: { default: null },
     mediaId: { default: null },
   },
-  toHtml: ({ node, mediaUrl }) => {
-    const source = resolveSource(node.attrs, mediaUrl);
+  toHtml: ({ node, mediaUrl, mediaImage, images }) => {
+    const resolved = resolveImage(node.attrs, mediaImage);
+    const source = resolved?.src ?? resolveSource(node.attrs, mediaUrl);
     return `<img${htmlAttributes({
       src: source,
-      alt: stringAttr(node, "alt") ?? "",
+      // The node's own alt text is the editor's decision for this page; the
+      // library's is the fallback for a node somebody inserted and never
+      // described.
+      alt: nonEmpty(stringAttr(node, "alt")) ?? resolved?.alt ?? "",
       title: stringAttr(node, "title"),
+      width: resolved?.width ?? undefined,
+      height: resolved?.height ?? undefined,
+      srcset: resolved?.srcset ?? undefined,
+      sizes: resolved?.srcset ? (resolved.sizes ?? undefined) : undefined,
+      loading: images?.loading,
+      decoding: images?.decoding,
       "data-media-id": stringAttr(node, "mediaId"),
     })}>`;
   },
-  toMarkdown: ({ node, mediaUrl }) => {
-    const source = resolveSource(node.attrs, mediaUrl) ?? "";
-    const alt = stringAttr(node, "alt") ?? "";
+  toMarkdown: ({ node, mediaUrl, mediaImage }) => {
+    const resolved = resolveImage(node.attrs, mediaImage);
+    const source = resolved?.src ?? resolveSource(node.attrs, mediaUrl) ?? "";
+    const alt = nonEmpty(stringAttr(node, "alt")) ?? resolved?.alt ?? "";
     const title = stringAttr(node, "title");
     return `![${alt}](${source}${title ? ` "${title}"` : ""})`;
   },
@@ -323,6 +338,19 @@ function spanAttributes(attrs: Record<string, unknown> | undefined): string {
     colspan: typeof colspan === "number" && colspan > 1 ? colspan : undefined,
     rowspan: typeof rowspan === "number" && rowspan > 1 ? rowspan : undefined,
   });
+}
+
+function resolveImage(
+  attrs: Record<string, unknown> | undefined,
+  mediaImage: ((id: string) => RichTextMediaImage | null) | undefined,
+): RichTextMediaImage | null {
+  const id = attrs?.mediaId;
+  if (typeof id !== "string" || !mediaImage) return null;
+  return mediaImage(id);
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === "" ? undefined : value;
 }
 
 function resolveSource(

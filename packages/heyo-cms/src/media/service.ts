@@ -5,13 +5,14 @@ import type { BufferedEvent, OutboxEntryMeta } from "../engine/outbox";
 import { scopedDb } from "../engine/scoped-db";
 import { CmsError } from "../errors";
 import { createId } from "../ids";
-import { and, eq, like, orderBy } from "../query";
+import { renderRichText as renderRichTextValue } from "../editor/serialize";
+import { and, eq, inList, like, orderBy } from "../query";
 import { streamOf, toBytes } from "../storage/bytes";
 import type { Actor } from "../types/actor";
 import type { ResolvedCmsConfig, UploadsConfig } from "../types/config";
 import type { DatabaseAdapter } from "../types/database";
 import type { ScopedDb } from "../types/hooks";
-import type { JsonObject } from "../types/json";
+import type { JsonObject, JsonValue } from "../types/json";
 import type {
   CmsMedia,
   FocalPoint,
@@ -19,9 +20,12 @@ import type {
   MediaCollectReport,
   MediaDeleteArgs,
   MediaDocument,
+  MediaDocumentUsage,
+  MediaForDocumentsArgs,
   MediaKeepArgs,
   MediaListArgs,
   MediaListResult,
+  MediaRichTextOptions,
   MediaUpdateArgs,
   MediaUploadArgs,
   MediaUsage,
@@ -32,9 +36,17 @@ import type { Row, Tx, Where } from "../types/query";
 import type { StorageAdapter } from "../types/storage";
 import { mediaJson, reservedMetadata, toMediaDocument } from "./document";
 import { collectMedia, storageKeysOf, type MediaGcContext } from "./gc";
-import { matchesMime, prepareUpload, sanitiseFilename } from "./pipeline";
-import { mediaTable, mediaUsagesTable } from "./usages";
 import {
+  describeError,
+  isProcessorMisconfigured,
+  matchesMime,
+  prepareUpload,
+  sanitiseFilename,
+} from "./pipeline";
+import { mediaImage, mediaSrcset, mediaUrl } from "./urls";
+import { mediaTable, mediaUsagesTable, richTextMedia } from "./usages";
+import {
+  isIdentityTransform,
   renderVariant,
   variantContentType,
   variantKey,
@@ -44,6 +56,7 @@ import {
 } from "./variants";
 
 const defaultLimit = 25;
+const failureReportInterval = 60 * 60 * 1000;
 const maxLimit = 200;
 const listOrder = [orderBy("created_at", "desc"), orderBy("id", "desc")];
 
@@ -74,6 +87,9 @@ export interface MediaServiceOptions {
 export function createMedia(options: MediaServiceOptions): CmsMedia {
   const { config } = options;
   let adapter: Promise<StorageAdapter> | undefined;
+  /** When each `id|size` last reported a failed render; see `reportFailure`. */
+  const reportedFailures = new Map<string, number>();
+  const publicPath = config.uploads?.publicPath;
 
   // -------------------------------------------------------------------------
   // Plumbing
@@ -215,8 +231,17 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
           created_at: now,
           updated_at: now,
         });
-        const media = toMediaDocument(row, store);
+        const media = toMediaDocument(row, store, publicPath);
         await emit(tx, "media.uploaded", media, actor);
+        if (prepared.processingError !== null) {
+          // Stored, but not as configured: the original went in because the
+          // processor failed. Same transaction as the upload, so the two
+          // facts arrive together or not at all.
+          await emit(tx, "media.processing.failed", media, actor, {
+            variant: null,
+            error: prepared.processingError,
+          });
+        }
         return media;
       });
     } catch (error) {
@@ -319,7 +344,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
     const last = page.at(-1);
 
     return {
-      docs: page.map((row) => toMediaDocument(row, store)),
+      docs: page.map((row) => toMediaDocument(row, store, publicPath)),
       limit,
       hasNextPage,
       cursor: last ? encodeCursor(last, listOrder) : null,
@@ -328,7 +353,116 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
 
   async function get(id: string): Promise<MediaDocument | null> {
     const row = await run((_tx, db) => db.findOne(mediaTable, eq("id", id)));
-    return row ? toMediaDocument(row, await storage()) : null;
+    return row ? toMediaDocument(row, await storage(), publicPath) : null;
+  }
+
+  async function getMany(
+    ids: readonly string[],
+  ): Promise<Map<string, MediaDocument>> {
+    const wanted = [...new Set(ids)].filter((id) => id.length > 0);
+    const found = new Map<string, MediaDocument>();
+    if (wanted.length === 0) return found;
+    const store = await storage();
+    // In chunks: an `IN` list is a bound parameter per id, and D1 refuses a
+    // statement with more than a hundred of them.
+    for (let start = 0; start < wanted.length; start += 90) {
+      const chunk = wanted.slice(start, start + 90);
+      const rows = await run((_tx, db) =>
+        db.find(mediaTable, inList("id", chunk)),
+      );
+      for (const row of rows) {
+        const media = toMediaDocument(row, store, publicPath);
+        found.set(media.id, media);
+      }
+    }
+    return found;
+  }
+
+  async function forDocuments(
+    collection: string,
+    args: MediaForDocumentsArgs = {},
+  ): Promise<Map<string, MediaDocumentUsage[]>> {
+    const resolved = [
+      ...Object.values(config.collections),
+      ...Object.values(config.globals),
+    ].find((entry) => entry.name === collection || entry.slug === collection);
+    if (!resolved) {
+      throw CmsError.notFound(`No collection or global called "${collection}"`);
+    }
+    // `media_usages` stores the collection's name, which is what the engine
+    // writes; a caller may know it by either name or slug.
+    const name = resolved.name;
+    const rows: Row[] = [];
+    if (args.ids === undefined) {
+      rows.push(
+        ...(await run((_tx, db) =>
+          db.find(mediaUsagesTable, eq("collection", name)),
+        )),
+      );
+    } else {
+      const ids = [...new Set(args.ids)];
+      for (let start = 0; start < ids.length; start += 90) {
+        const chunk = ids.slice(start, start + 90);
+        rows.push(
+          ...(await run((_tx, db) =>
+            db.find(
+              mediaUsagesTable,
+              and(eq("collection", name), inList("document_id", chunk)),
+            ),
+          )),
+        );
+      }
+    }
+
+    const files = await getMany(rows.map((row) => String(row.media_id)));
+    const result = new Map<string, MediaDocumentUsage[]>();
+    // In the order the references were recorded, which is the order the
+    // fields and the document were written in more often than not.
+    const ordered = [...rows].sort(
+      (a, b) =>
+        String(a.document_id).localeCompare(String(b.document_id)) ||
+        String(a.id).localeCompare(String(b.id)),
+    );
+    for (const row of ordered) {
+      const media = files.get(String(row.media_id));
+      if (!media) continue;
+      const documentId = String(row.document_id);
+      const locale = String(row.locale ?? "");
+      const list = result.get(documentId) ?? [];
+      list.push({
+        media,
+        field: String(row.field),
+        locale: locale === "" ? null : locale,
+      });
+      result.set(documentId, list);
+    }
+    return result;
+  }
+
+  async function renderRichText(
+    value: unknown,
+    args: MediaRichTextOptions = {},
+  ): Promise<string> {
+    const ids = config.uploads
+      ? richTextMedia((value ?? null) as JsonValue)
+      : [];
+    const files = ids.length > 0 ? await getMany(ids) : new Map();
+    return renderRichTextValue(value, {
+      format: args.format ?? "html",
+      mediaImage: (id) => {
+        const media = files.get(id);
+        if (!media) return null;
+        return mediaImage(config, media, {
+          ...(args.locale === undefined ? {} : { locale: args.locale }),
+          ...(args.sizes === undefined ? {} : { sizes: args.sizes }),
+        });
+      },
+      // A file that is not in the library any more still has the URL the
+      // CMS would serve it from, which answers 404 — better than a `src`
+      // left over from wherever the editor pasted it.
+      mediaUrl: (id) => `${config.basePath}/media/${encodeURIComponent(id)}/original`, // prettier-ignore
+      images: { loading: args.loading ?? "lazy", decoding: "async" },
+    });
   }
 
   async function usages(id: string): Promise<MediaUsage[]> {
@@ -358,7 +492,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
     const store = await storage();
     const { media, stale } = await run(async (tx, db) => {
       const row = await load(db, args.id);
-      const before = toMediaDocument(row, store);
+      const before = toMediaDocument(row, store, publicPath);
 
       // Every stored size was rendered from the old crop and the old focal
       // point, so keeping them would serve a thumbnail of the wrong part of
@@ -394,7 +528,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
       next.metadata = metadata;
 
       await db.update(mediaTable, eq("id", args.id), next);
-      const updated = toMediaDocument({ ...row, ...next }, store);
+      const updated = toMediaDocument({ ...row, ...next }, store, publicPath);
       await emit(tx, "media.updated", updated, actor);
 
       const contentType = variantContentType(settings.images, updated.mimeType);
@@ -433,7 +567,11 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
         updated_at: new Date(),
       };
       await db.update(mediaTable, eq("id", args.id), next);
-      const updated = toMediaDocument({ ...row, ...next }, await storage());
+      const updated = toMediaDocument(
+        { ...row, ...next },
+        await storage(),
+        publicPath,
+      );
       await emit(tx, "media.updated", updated, actor, { kept: true });
       return updated;
     });
@@ -452,7 +590,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
 
     const { media, keys } = await run(async (tx, db) => {
       const row = await load(db, args.id);
-      const current = toMediaDocument(row, store);
+      const current = toMediaDocument(row, store, publicPath);
 
       if (args.force !== true) {
         const used = await db.find(mediaUsagesTable, eq("media_id", args.id));
@@ -495,7 +633,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
     const store = await storage();
     const row = await run((_tx, db) => db.findOne(mediaTable, eq("id", args.id))); // prettier-ignore
     if (!row) return null;
-    const media = toMediaDocument(row, store);
+    const media = toMediaDocument(row, store, publicPath);
 
     if (!args.variant) return original(store, media, null);
 
@@ -510,7 +648,18 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
       return original(store, media, args.variant, query);
     }
 
+    const transform = variantTransform(settings.images, args.variant, media);
     const contentType = variantContentType(settings.images, media.mimeType);
+    // A size that would hand back the original unchanged — a 1920px width on
+    // an 1200px image, no crop, no new format — is answered with the
+    // original. Rendering it would store a copy of the same pixels, and on a
+    // metered processor spend a transformation on nothing.
+    if (
+      contentType === media.mimeType &&
+      isIdentityTransform(transform, media)
+    ) {
+      return original(store, media, args.variant);
+    }
     const key = variantKey(media.storageKey, args.variant, contentType);
 
     if (args.refresh !== true) {
@@ -528,18 +677,31 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
           body: stored,
           url: await publicUrl(store, key),
           cached: true,
+          processingError: null,
         };
       }
     }
 
     const source = await store.get(media.storageKey);
     if (!source) return null;
-    const rendered = await renderVariant(
-      processor,
-      await toBytes(source),
-      variantTransform(settings.images, args.variant, media),
-      media,
-    );
+    let rendered: Awaited<ReturnType<typeof renderVariant>>;
+    try {
+      rendered = await renderVariant(
+        processor,
+        await toBytes(source),
+        transform,
+        media,
+      );
+    } catch (error) {
+      if (isProcessorMisconfigured(error)) throw error;
+      // The page still needs a picture. The original is a correct one, only
+      // a heavier one, so it is served — and not stored under the variant's
+      // key, so the size is rendered for real once the processor recovers.
+      const reason = describeError(error);
+      await reportFailure(media, args.variant, reason);
+      const fallback = await original(store, media, args.variant);
+      return fallback && { ...fallback, processingError: reason };
+    }
     if (!rendered) return original(store, media, args.variant);
 
     // Written into storage, not just returned. That is the whole difference
@@ -564,7 +726,47 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
       body: streamOf(rendered.data),
       url: await publicUrl(store, key),
       cached: false,
+      processingError: null,
     };
+  }
+
+  /**
+   * `media.processing.failed` for a size that fell back to the original.
+   *
+   * At most once per file and size per hour from one process: the failure
+   * is met on every request for the page until the processor recovers, and
+   * an outbox row per image per page view is a second outage, not a report.
+   */
+  async function reportFailure(
+    media: MediaDocument,
+    name: string,
+    error: string,
+  ): Promise<void> {
+    const key = `${media.id}|${name}`;
+    const now = Date.now();
+    const last = reportedFailures.get(key);
+    if (last !== undefined && now - last < failureReportInterval) return;
+    if (reportedFailures.size >= 1000) reportedFailures.clear();
+    reportedFailures.set(key, now);
+    try {
+      await run((tx) =>
+        options.emit(
+          tx,
+          [
+            {
+              type: "media.processing.failed",
+              data: { media: mediaJson(media), variant: name, error },
+              previous: null,
+            },
+          ],
+          { actor: null, collection: "media", documentId: media.id },
+        ),
+      );
+      options.deliver();
+    } catch {
+      // Reporting is best effort: a database that cannot take the event must
+      // not take the picture down with it.
+    }
   }
 
   async function original(
@@ -590,6 +792,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
       // was not rendered, and saying so is how a caller can tell the two
       // deployments apart.
       cached: name === null,
+      processingError: null,
     };
   }
 
@@ -617,6 +820,7 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
     upload,
     list,
     get,
+    getMany,
     update,
     delete: remove,
     keep,
@@ -624,6 +828,11 @@ export function createMedia(options: MediaServiceOptions): CmsMedia {
     variant,
     collect,
     storage,
+    forDocuments,
+    url: (media, args) => mediaUrl(config, media, args),
+    srcset: (media, args) => mediaSrcset(config, media, args),
+    image: (media, args) => mediaImage(config, media, args),
+    renderRichText,
   };
 }
 

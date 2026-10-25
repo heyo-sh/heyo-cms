@@ -72,6 +72,49 @@ export function variantTransform(
   return transform;
 }
 
+/**
+ * Whether rendering this transform would give back the original's pixels.
+ *
+ * Only the fits that never crop are considered: `inside` (the default) and
+ * `outside` leave an image alone when it is already within the box, and
+ * every processor here refuses to enlarge. `cover` and `contain` change the
+ * aspect ratio, and the two processors disagree about what they do to an
+ * image smaller than the box, so those are always rendered. A crop always
+ * changes the pixels; a format change is the caller's to check.
+ */
+export function isIdentityTransform(
+  transform: ImageTransform,
+  media: Pick<MediaDocument, "width" | "height">,
+): boolean {
+  const { width, height } = media;
+  if (width === null || height === null || width <= 0 || height <= 0) {
+    return false;
+  }
+  if (transform.crop) {
+    const crop = transform.crop;
+    const whole =
+      crop.x <= 0 && crop.y <= 0 && crop.width >= width && crop.height >= height; // prettier-ignore
+    if (!whole) return false;
+  }
+
+  const fit = transform.fit ?? "inside";
+  const w = transform.width;
+  const h = transform.height;
+  if (w === undefined && h === undefined) return true;
+  if (fit === "inside") {
+    return (w === undefined || w >= width) && (h === undefined || h >= height);
+  }
+  if (fit === "outside") {
+    // The smallest scale covering the box; at 1 or more nothing shrinks.
+    const scale = Math.max(
+      w === undefined ? 0 : w / width,
+      h === undefined ? 0 : h / height,
+    );
+    return scale >= 1;
+  }
+  return false;
+}
+
 /** The content type a variant will have, before anything is rendered. */
 export function variantContentType(
   images: ImagesConfig | undefined,

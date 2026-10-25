@@ -6,6 +6,7 @@ import type {
   FocalPoint,
   MediaSource,
   MediaStatus,
+  MediaVariantResult,
 } from "../../types/media";
 import { requestSource, requirePermission } from "../guard";
 import { boolean, integer } from "../params";
@@ -297,30 +298,7 @@ export function mediaRoutes(cms: CmsInstance): RouteRecord[] {
         });
         if (!result) throw CmsError.notFound("No such file.");
 
-        // The checksum of the original plus the variant name: two deployments
-        // of the same bytes produce the same tag, and a re-render of the same
-        // size does not invalidate a cache that is already correct.
-        const etag = `"${result.media.checksum ?? result.media.id}-${result.variant ?? "original"}"`; // prettier-ignore
-        if (context.request.headers.get("if-none-match") === etag) {
-          await result.body.cancel();
-          return new Response(null, { status: 304, headers: { etag } });
-        }
-
-        return new Response(result.body, {
-          status: 200,
-          headers: {
-            "content-type": result.contentType,
-            etag,
-            // A variant is addressed by a name whose meaning is fixed by the
-            // configuration, so the bytes behind one URL only change when an
-            // editor re-crops — which changes the checksum and the tag.
-            "cache-control": "public, max-age=31536000, immutable",
-            "x-heyo-cms-cache": result.cached ? "hit" : "miss",
-            ...(result.size === null
-              ? {}
-              : { "content-length": String(result.size) }),
-          },
-        });
+        return mediaResponse(context.request, result);
       },
       openapi: {
         summary: "Serve a file or one of its sizes",
@@ -342,6 +320,130 @@ export function mediaRoutes(cms: CmsInstance): RouteRecord[] {
       },
     },
   ];
+}
+
+/**
+ * One file, as an HTTP response: the API route and the public route share it.
+ *
+ * The tag is the checksum of the original plus the variant name: two
+ * deployments of the same bytes produce the same tag, and a re-render of the
+ * same size does not invalidate a cache that is already correct. A variant is
+ * addressed by a name whose meaning is fixed by the configuration, so the
+ * bytes behind one URL only change when an editor re-crops — which changes
+ * the checksum and the tag — and the answer may be kept for a year.
+ *
+ * Except when the size could not be rendered and the original stands in for
+ * it: that answer is right for now and wrong once the processor recovers, so
+ * it carries its own tag and is cached for minutes, not for a year.
+ */
+export async function mediaResponse(
+  request: Request,
+  result: MediaVariantResult,
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+  const fallback = result.processingError !== null;
+  const etag = `"${result.media.checksum ?? result.media.id}-${result.variant ?? "original"}${fallback ? "-fallback" : ""}"`; // prettier-ignore
+  const headers: Record<string, string> = {
+    "content-type": result.contentType,
+    etag,
+    "cache-control": fallback
+      ? "public, max-age=300"
+      : "public, max-age=31536000, immutable",
+    "x-content-type-options": "nosniff",
+    "x-heyo-cms-cache": fallback ? "fallback" : result.cached ? "hit" : "miss",
+    ...extraHeaders,
+  };
+
+  if (ifNoneMatch(request.headers.get("if-none-match"), etag)) {
+    await result.body.cancel();
+    return new Response(null, { status: 304, headers });
+  }
+  if (result.size !== null) headers["content-length"] = String(result.size);
+  if (request.method === "HEAD") {
+    await result.body.cancel();
+    return new Response(null, { status: 200, headers });
+  }
+  return new Response(result.body, { status: 200, headers });
+}
+
+/** `If-None-Match`, including a list of tags and the weak form a proxy may add. */
+function ifNoneMatch(header: string | null, etag: string): boolean {
+  if (header === null) return false;
+  if (header.trim() === "*") return true;
+  return header
+    .split(",")
+    .map((tag) => tag.trim().replace(/^W\//, ""))
+    .includes(etag);
+}
+
+/**
+ * The files themselves, at addresses made for the web:
+ *
+ *   /media/med_0mv…/condition-report.png
+ *   /media/med_0mv…/card/condition-report.webp
+ *
+ * Registered only with `uploads.publicPath`, outside `basePath`, on the root
+ * router: the application mounts the CMS handler on this path as well. The
+ * id says which file and the optional middle segment which size; the name is
+ * for people and image search, and is otherwise ignored, so a renamed file
+ * keeps every link it ever had. No actor, no hooks, no RBAC — a file on a
+ * page is public, which is what this route exists to say.
+ */
+export function publicMediaRoutes(cms: CmsInstance): RouteRecord[] {
+  const uploads = cms._config.uploads;
+  const base = uploads?.publicPath;
+  if (!uploads || !base) return [];
+  const sizes = new Set(Object.keys(uploads.images?.variants?.sizes ?? {}));
+
+  const serve = async (
+    context: Parameters<RouteRecord["handler"]>[0],
+  ): Promise<Response> => {
+    const id = context.params.id ?? "";
+    const name = context.params.variant;
+    // Unknown ids and sizes are a 404 before anything is read: this path is
+    // public, and a guess must not cost a query or a storage call.
+    if (
+      !/^[A-Za-z0-9_-]+$/.test(id) ||
+      (name !== undefined && !sizes.has(name))
+    ) {
+      return notFound();
+    }
+    const result = await cms.media
+      .variant({ id, ...(name === undefined ? {} : { variant: name }) })
+      .catch((error: unknown) => {
+        if (error instanceof CmsError && error.status === 404) return null;
+        throw error;
+      });
+    if (!result) return notFound();
+    return mediaResponse(context.request, result);
+  };
+
+  return [
+    {
+      method: "GET",
+      path: `${base}/:id/:file`,
+      source: "core",
+      handler: serve,
+    },
+    {
+      method: "GET",
+      path: `${base}/:id/:variant/:file`,
+      source: "core",
+      handler: serve,
+    },
+  ];
+}
+
+function notFound(): Response {
+  return new Response("Not found", {
+    status: 404,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      // Short: an upload that is still on its way must not be a cached 404
+      // for a day.
+      "cache-control": "public, max-age=60",
+    },
+  });
 }
 
 /**
