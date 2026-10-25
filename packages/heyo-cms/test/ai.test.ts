@@ -37,15 +37,12 @@ const collections = () => ({
       title: text({
         required: true,
         localized: true,
-        ai: {
-          generate: { prompt: "Write a title.", context: ["body", "notes"] },
-          improve: true,
-          translate: true,
-        },
+        aiGenerate: { prompt: "Write a title.", context: ["body", "notes"] },
+        ai: { improve: true, translate: true },
       }),
       body: richText({
         localized: true,
-        ai: { generate: { prompt: "Write the article.", context: ["title"] } },
+        aiGenerate: { prompt: "Write the article.", context: ["title"] },
       }),
       notes: text({}),
       slug: text({
@@ -495,8 +492,9 @@ describe("the configuration", () => {
     expect(() => media({ aiGenerate: { prompt: "Generate a URL" } })).toThrow(
       /generation currently supports/,
     );
-    expect(() => text({ aiGenerate: {}, ai: { generate: true } })).toThrow(
-      /either aiGenerate/,
+    // Generation has one spelling.
+    expect(() => text({ ai: { generate: true } })).toThrow(
+      /configured with aiGenerate/,
     );
   });
 
@@ -530,7 +528,7 @@ describe("the configuration", () => {
         },
         collections: {
           pages: defineCollection({
-            fields: { picture: media({ ai: { generate: { prompt: "Draw." } } }) }, // prettier-ignore
+            fields: { picture: media({ ai: { improve: { prompt: "Sharper." } } }) }, // prettier-ignore
           }),
         },
       }),
@@ -627,10 +625,6 @@ describe("over HTTP", () => {
     });
     const paths = cms.inspect().routes.map((route) => route.path);
     expect(paths.some((path) => path.includes("/ai/"))).toBe(false);
-    // The document chat is gone, not redirected. A route that 404s is the
-    // honest answer; a route that 301s to the assistant would promise a
-    // compatible replacement, and the replacement is not compatible.
-    expect(paths.some((path) => path.endsWith("/chat"))).toBe(false);
     await cms.close();
   });
 
