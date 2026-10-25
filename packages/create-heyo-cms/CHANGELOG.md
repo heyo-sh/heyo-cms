@@ -1,5 +1,84 @@
 # @heyo-sh/create-heyo-cms
 
+## 0.1.1
+
+### Patch Changes
+
+- c953e65: **The Astro template no longer writes `CRON_SECRET` into the server bundle.**
+  `src/pages/api/cron.ts` read the secret as
+  `import.meta.env.CRON_SECRET ?? process.env.CRON_SECRET`. Astro replaces
+  `import.meta.env.NAME` with the value it finds at build time — in `.env` or
+  the shell — for every variable without a `PUBLIC_` prefix, so a project built
+  with `CRON_SECRET` set had the literal value in the cron chunk
+  (`dist/server` on Cloudflare, `.vercel/output/functions` on Vercel), and the
+  route kept checking that value: a secret changed later with
+  `wrangler secret put` or in Vercel's settings was refused, and a build made
+  from a copied `.env.example` accepted `Bearer change-me`. Projects with no
+  `CRON_SECRET` at build time were not affected.
+
+  The route now reads it with `getSecret("CRON_SECRET")` from
+  `astro:env/server`, which looks it up when a request arrives: from the Worker's
+  bindings on Cloudflare, from `process.env` on Vercel, and from `.env` in
+  `astro dev`. Existing Astro projects should make the same one-line change and
+  redeploy.
+
+  **`astro dev` now sees `.env`.** Astro hands `.env` to `import.meta.env` only,
+  while `heyo-cms.config.ts` reads `DATABASE_URL`, `MONGODB_URL` and the
+  storage keys from `process.env`, so following the README
+  (`cp .env.example .env`, then `dev`) failed with "DATABASE_URL is not set" on
+  the Vercel deployment. `astro.config.ts` now loads `.env` and `.env.local`
+  into `process.env` with `process.loadEnvFile`, in the order the `heyo-cms`
+  CLI uses, without overriding what the shell set.
+
+  A scaffold test now fails if any generated project reads a variable through
+  `import.meta.env` other than the build's own flags, and `bun run example
+smoke` checks `/api/cron` in every framework example, with the secret
+  provided in `.env` as a reader would.
+
+- 225e7d7: **`convert: { to: "webp" }` now works on Cloudflare Workers.**
+  `uploads.images.convert`, `maxDimensions` and `variants.mode: "pregenerate"`
+  need an `ImageProcessor`, and the only one shipped was `sharpImages()` — a
+  native module that a Worker cannot load. The Cloudflare templates therefore
+  shipped without a processor, and those options could not be used there.
+
+  `cloudflareImages()` from `@heyo-sh/heyo-cms/uploads` is a processor backed by
+  the Workers Images binding (`env.IMAGES`), which resizes and re-encodes inside
+  the runtime:
+
+  ```ts
+  import { cloudflareImages } from "@heyo-sh/heyo-cms/uploads";
+
+  images: {
+    processor: cloudflareImages(() => env.IMAGES),
+    convert: { to: "webp", keep: ["image/gif", "image/svg+xml"] },
+    maxDimensions: { width: 3840, height: 3840 },
+  }
+  ```
+
+  The binding is typed structurally, so nothing is added to the dependencies,
+  and it may be passed directly or as a (possibly async) function. Without a
+  binding the upload fails with `image_processor_missing` rather than storing
+  the wrong file. Crop and focal point are resolved by the same code
+  `sharpImages()` uses and sent as a `trim`; the fit modes are translated
+  (`inside` to `scale-down`, `contain` to `pad`, `outside` computed), and an
+  image is never enlarged. JPEG, PNG, GIF and WebP are accepted as input.
+
+  Two things differ from `sharpImages()`: the binding always re-encodes, so EXIF
+  is always stripped and `stripMetadata: false` has no effect; and `wrangler dev`
+  simulates the binding locally without applying `trim` or `gravity`
+  coordinates, so a crop or focal point only shows in development with
+  `"remote": true` on the binding.
+
+  The configuration error for a missing processor now names both processors.
+
+  **The generated Cloudflare projects use it.** `wrangler.json` declares
+  `"images": { "binding": "IMAGES" }` and the `images` block in
+  `heyo-cms.config.ts` now has the same `convert`, `quality`, `maxDimensions`
+  and `crop` settings as the Vercel projects, resolving the binding the way the
+  bucket and the database are resolved. Cloudflare bills transformations, so
+  `DEPLOYMENT.md` says how to go back to serving the original with the size in
+  the URL.
+
 ## 0.1.0
 
 ### Minor Changes

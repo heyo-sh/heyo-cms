@@ -1,5 +1,150 @@
 # @heyo-sh/heyo-cms
 
+## 0.2.0
+
+### Minor Changes
+
+- 225e7d7: **`convert: { to: "webp" }` now works on Cloudflare Workers.**
+  `uploads.images.convert`, `maxDimensions` and `variants.mode: "pregenerate"`
+  need an `ImageProcessor`, and the only one shipped was `sharpImages()` — a
+  native module that a Worker cannot load. The Cloudflare templates therefore
+  shipped without a processor, and those options could not be used there.
+
+  `cloudflareImages()` from `@heyo-sh/heyo-cms/uploads` is a processor backed by
+  the Workers Images binding (`env.IMAGES`), which resizes and re-encodes inside
+  the runtime:
+
+  ```ts
+  import { cloudflareImages } from "@heyo-sh/heyo-cms/uploads";
+
+  images: {
+    processor: cloudflareImages(() => env.IMAGES),
+    convert: { to: "webp", keep: ["image/gif", "image/svg+xml"] },
+    maxDimensions: { width: 3840, height: 3840 },
+  }
+  ```
+
+  The binding is typed structurally, so nothing is added to the dependencies,
+  and it may be passed directly or as a (possibly async) function. Without a
+  binding the upload fails with `image_processor_missing` rather than storing
+  the wrong file. Crop and focal point are resolved by the same code
+  `sharpImages()` uses and sent as a `trim`; the fit modes are translated
+  (`inside` to `scale-down`, `contain` to `pad`, `outside` computed), and an
+  image is never enlarged. JPEG, PNG, GIF and WebP are accepted as input.
+
+  Two things differ from `sharpImages()`: the binding always re-encodes, so EXIF
+  is always stripped and `stripMetadata: false` has no effect; and `wrangler dev`
+  simulates the binding locally without applying `trim` or `gravity`
+  coordinates, so a crop or focal point only shows in development with
+  `"remote": true` on the binding.
+
+  The configuration error for a missing processor now names both processors.
+
+  **The generated Cloudflare projects use it.** `wrangler.json` declares
+  `"images": { "binding": "IMAGES" }` and the `images` block in
+  `heyo-cms.config.ts` now has the same `convert`, `quality`, `maxDimensions`
+  and `crop` settings as the Vercel projects, resolving the binding the way the
+  bucket and the database are resolved. Cloudflare bills transformations, so
+  `DEPLOYMENT.md` says how to go back to serving the original with the size in
+  the URL.
+
+- 96a2f56: **`indexNow()` from `@heyo-sh/heyo-cms/plugins`, and the plugin API it needs.**
+
+  `indexNow({ key, url, collections, enabled })` tells the IndexNow engines
+  about a public page after every committed write — the address it has now and
+  the one it had — and serves the key file at `/<key>.txt`. A failed ping is
+  logged, never retried into other listeners.
+
+  Plugins gain two capabilities, which `indexNow()` uses and nothing else
+  needs to know about:
+
+  - `events: { "document.updated": listener }` — post-commit listeners,
+    delivered from the outbox like `cms.on()`, registered before the first
+    write.
+  - `routes: [{ root: true, … }]` — a route matched against the whole URL path
+    rather than below `basePath`, for files a crawler fetches at a fixed
+    address. Root routes are public: no actor, no HTTP hooks.
+
+  The framework adapters hand a write's event delivery to the platform's
+  `waitUntil`, so a serverless runtime does not freeze before webhooks,
+  listeners and plugins have run. They find it themselves on Cloudflare
+  (`locals.cfContext` in Astro, `context.cloudflare.ctx` in React Router,
+  `platform.ctx` in SvelteKit, `event.waitUntil` in h3) and accept
+  `cmsHandler(cms, { waitUntil })` elsewhere (Vercel's, OpenNext's).
+  `cms.handler` itself is unchanged: `Request → Response`.
+
+- 96a2f56: **Files at addresses made for the web, described for `<img>`, and a processor
+  that fails without taking pages down.**
+
+  - `uploads.publicPath: "/media"` serves the library at `/media/<id>/<name>`
+    and `/media/<id>/<size>/<name>`, outside `basePath` (mount the handler there
+    too), with an `ETag`, `HEAD`, and a year of caching. `MediaDocument.url`,
+    `cms.media.url()`, `srcset`s and rich text point there.
+  - `cms.media.url(file, { variant })`, `cms.media.srcset(file)` and
+    `cms.media.image(file, { sizes, locale })` compute URLs, widths, heights and
+    `srcset`s from the configuration — no request, no render.
+  - `cms.media.renderRichText(doc, { locale, sizes })` resolves every library
+    image in one query: public URL, `width`/`height`, `srcset`, lazy loading,
+    and the library's alt text where the node has none. `?richText=html` on the
+    REST API does the same; `richTextToHtml()` accepts a `mediaImage` resolver.
+  - `cms.media.getMany(ids)` and `cms.media.forDocuments(collection)` — every
+    file a collection's documents use, per document and locale, from
+    `media_usages` (an image sitemap in two queries).
+  - A processor that fails (Cloudflare's `9422` once a free quota is spent, an
+    outage, an undecodable file) no longer fails the upload or the page: the
+    original is stored or served, nothing is stored under the size's key, and
+    `media.processing.failed` is emitted at most hourly per file and size.
+    `image_processor_missing` still fails loudly.
+  - A file already in the `convert` format is no longer re-encoded (a lossless
+    WebP stays lossless), and a size that would not change the picture is
+    answered with the original instead of a render.
+  - `cloudflareImages()` sends `trim` as `{ top, left, width, height }`.
+
+- 96a2f56: **`slug()`: a URL slug the engine looks after, on every write path.**
+
+  ```ts
+  slug: slug({ from: "title", localized: true, history: true });
+  ```
+
+  Made from `from` once while empty (retitling never moves it), cleaned when
+  typed (`"Łódź & Kraków"` → `lodz-krakow`, with Latin, Cyrillic and Greek
+  transliterated, or by a `slugify` of your own), unique per language — trashed documents included — with
+  `-2`, `-3` suffixes when generated and a `409` when typed. With `history`, a
+  slug a document stops using becomes a previous address in the new
+  `slug_history` table (`heyo-cms generate` adds it only for configurations that
+  keep history): nobody else may take it, and it goes when the document is
+  purged.
+
+  `cms.api.<collection>.resolveSlug(slug, { locale })` finds a document by a
+  current slug, one from another language, or a previous one, and says which
+  (`current`, `locale`) — the lookup behind a page route and its 301s.
+  `previousSlugs`, `addPreviousSlug` (merging two pages) and
+  `removePreviousSlug` manage the history, with the REST routes
+  `GET /<collection>/resolve-slug` and `/<collection>/<id>/previous-slugs`, and
+  the same methods on the client. The panel lists a document's previous slugs
+  under the field, where an editor can add and remove them. `slugify()`,
+  `isSlug()` and `slugPattern` are exported from `@heyo-sh/heyo-cms/fields`.
+
+### Patch Changes
+
+- b7cbcef: **SQLite no longer fails with "database is locked" when a second process
+  writes to the same file.** That is the ordinary setup in development: the dev
+  server and `heyo-cms seed` or `create-admin` next to it, or a Cloudflare
+  project's local D1 under `.wrangler/state`, which the CLI opens directly while
+  `wrangler dev` serves it. Two things made the second writer fail at once
+  instead of waiting its turn:
+
+  - `bun:sqlite` and `node:sqlite` open a database with a busy timeout of 0.
+    `sqlite()` now sets `PRAGMA busy_timeout = 5000` — the default of
+    `better-sqlite3` — unless the database already has one; the new
+    `busyTimeout` option sets it explicitly (`0` restores the old behaviour).
+  - Transactions opened with a plain `BEGIN`, which takes the write lock only at
+    the first write. If another process wrote after the transaction's first
+    read, SQLite refuses that lock immediately, timeout or not. The SQLite
+    dialect now opens transactions with `BEGIN IMMEDIATE`, so the lock is taken
+    — and waited for — up front. Postgres is unchanged, and D1 bindings, which
+    have no interactive transactions, are not affected.
+
 ## 0.1.0
 
 ### Minor Changes
