@@ -27,6 +27,8 @@ export interface SqlDialect {
   decode(value: unknown, type: ColumnType): ColumnValue;
   /** True when `ALTER TABLE ... ALTER COLUMN` exists. */
   readonly supportsAlterColumn: boolean;
+  /** The statement that opens a transaction; `BEGIN` when absent. */
+  readonly beginTransaction?: string;
 }
 
 const identifier = (value: string): string => {
@@ -142,6 +144,14 @@ const sqliteTypes: Record<ColumnType, string> = {
  */
 export const sqliteDialect: SqlDialect = {
   id: "sqlite",
+  /**
+   * The write lock is taken when the transaction opens, while the busy
+   * timeout can still wait for it. A plain `BEGIN` reads first and asks for
+   * the lock at its first write; if another process wrote in between, SQLite
+   * answers "database is locked" at once, without waiting, because the reads
+   * already made would be stale.
+   */
+  beginTransaction: "BEGIN IMMEDIATE",
   placeholder: () => "?",
   quote: identifier,
   columnType: (column) =>
