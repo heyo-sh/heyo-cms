@@ -265,7 +265,7 @@ function idsOf(value: JsonValue | undefined): string[] {
  * its attributes anywhere, so this walks the whole structure rather than
  * assuming the shape TipTap's image node happens to have today.
  */
-function richTextMedia(value: JsonValue | undefined): string[] {
+export function richTextMedia(value: JsonValue | undefined): string[] {
   const found: string[] = [];
   const stack: JsonValue[] = [value ?? null];
 

@@ -24,6 +24,16 @@ export interface HandlerLike {
 /** The shape of what Astro passes an endpoint. */
 export interface AstroContextLike {
   request: Request;
+  /**
+   * `@astrojs/cloudflare` puts the Worker's execution context here, and its
+   * `waitUntil` is used without being asked for.
+   */
+  locals?: unknown;
+}
+
+export interface AstroHandlerOptions {
+  /** For a platform whose `waitUntil` is not in `locals` (Vercel's, say). */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 export type AstroRoute = (context: AstroContextLike) => Promise<Response>;
@@ -39,8 +49,14 @@ export interface AstroRouteHandlers {
   ALL: AstroRoute;
 }
 
-export function cmsHandler(cms: HandlerLike): AstroRouteHandlers {
-  const handle: AstroRoute = ({ request }) => cms.handler(request);
+export function cmsHandler(
+  cms: HandlerLike,
+  options: AstroHandlerOptions = {},
+): AstroRouteHandlers {
+  const handle: AstroRoute = ({ request, locals }) => {
+    const waitUntil = options.waitUntil ?? cloudflareWaitUntil(locals);
+    return cms.handler(request, waitUntil ? { waitUntil } : undefined);
+  };
   return {
     GET: handle,
     POST: handle,
@@ -53,4 +69,24 @@ export function cmsHandler(cms: HandlerLike): AstroRouteHandlers {
     // with one named export if it prefers.
     ALL: handle,
   };
+}
+
+/**
+ * `Astro.locals.cfContext.waitUntil` (Astro 6 and later), or the older
+ * `locals.runtime.ctx.waitUntil`, bound to its context.
+ */
+function cloudflareWaitUntil(
+  locals: unknown,
+): ((promise: Promise<unknown>) => void) | undefined {
+  const value = locals as
+    | {
+        cfContext?: { waitUntil?: (promise: Promise<unknown>) => void };
+        runtime?: {
+          ctx?: { waitUntil?: (promise: Promise<unknown>) => void };
+        };
+      }
+    | undefined;
+  const context = value?.cfContext ?? value?.runtime?.ctx;
+  const waitUntil = context?.waitUntil;
+  return typeof waitUntil === "function" ? waitUntil.bind(context) : undefined;
 }

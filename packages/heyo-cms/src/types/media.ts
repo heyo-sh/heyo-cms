@@ -74,6 +74,78 @@ export interface MediaUsage {
   createdAt: string | null;
 }
 
+/** One file used by one document, as `cms.media.forDocuments()` returns it. */
+export interface MediaDocumentUsage {
+  media: MediaDocument;
+  field: string;
+  /** Null for a field that is not localized: the file is used in every locale. */
+  locale: string | null;
+}
+
+export interface MediaForDocumentsArgs {
+  /** Only these documents. All of the collection's, by default. */
+  ids?: readonly string[];
+}
+
+/** The fields of a file a URL is made of. A `MediaDocument` has them all. */
+export type MediaUrlInput = Pick<
+  MediaDocument,
+  "id" | "filename" | "mimeType"
+> &
+  Partial<Pick<MediaDocument, "width" | "height" | "crop" | "focalPoint">>;
+
+export type MediaImageInput = MediaUrlInput &
+  Partial<Pick<MediaDocument, "alt">>;
+
+export interface MediaUrlOptions {
+  /** A name from `uploads.images.variants.sizes`; the original when omitted. */
+  variant?: string;
+}
+
+export interface MediaSrcsetOptions {
+  /**
+   * The sizes to offer, by name. By default every declared size that keeps
+   * the picture's shape: `inside` and `outside` fits, and one-sided boxes.
+   */
+  sizes?: string[];
+}
+
+export interface MediaImageOptions {
+  /** One named size as the `src`, without a `srcset`: a thumbnail, a card. */
+  variant?: string;
+  /** The `sizes` attribute that goes with the `srcset`, e.g. `(min-width: 768px) 680px, 100vw`. */
+  sizes?: string;
+  /** The sizes the `srcset` offers; see `MediaSrcsetOptions.sizes`. */
+  srcset?: string[];
+  /** Which language of the library's alt text; the default locale otherwise. */
+  locale?: string;
+}
+
+/** An `<img>`, as data. Every field maps to the attribute of the same name. */
+export interface MediaImage {
+  src: string;
+  width: number | null;
+  height: number | null;
+  srcset: string | null;
+  sizes: string | null;
+  /** The library's alt text in the requested locale, or null when there is none. */
+  alt: string | null;
+}
+
+export interface MediaRichTextOptions {
+  /** `html` by default. */
+  format?: "html" | "markdown" | "text";
+  /** Which language of the library's alt text to fall back on. */
+  locale?: string;
+  /** The `sizes` attribute for every image's `srcset`. */
+  sizes?: string;
+  /**
+   * `lazy` by default: images in prose are rarely what a reader sees first.
+   * `eager` for a document whose first image is the largest thing on screen.
+   */
+  loading?: "lazy" | "eager";
+}
+
 /** What an upload may be handed. All of them end up as bytes. */
 export type MediaSource =
   Blob | Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>;
@@ -176,6 +248,15 @@ export interface MediaVariantResult {
   body: ReadableStream;
   url: string;
   cached: boolean;
+  /**
+   * Why the named size could not be rendered, when it could not.
+   *
+   * The original is served in its place and nothing is stored, so the next
+   * request tries again — the usual cause is a quota that resets, or a
+   * service that comes back. Null whenever the answer is what was asked for.
+   * An HTTP layer should not cache a fallback for long.
+   */
+  processingError: string | null;
 }
 
 export interface MediaCollectArgs {
@@ -217,6 +298,42 @@ export interface CmsMedia {
   collect(args?: MediaCollectArgs): Promise<MediaCollectReport>;
   /** The configured adapter, built on first use. */
   storage(): Promise<StorageAdapter>;
+  /**
+   * Several files by id, in one query. Ids that do not exist are absent from
+   * the map rather than an error: a page that references a deleted picture
+   * should lose the picture, not the page.
+   */
+  getMany(ids: readonly string[]): Promise<Map<string, MediaDocument>>;
+  /**
+   * Every file a collection's documents use, per document — read from the
+   * reference count the engine already keeps, so it costs two queries for
+   * the whole collection instead of a parse of every document. What an
+   * image sitemap is built from.
+   */
+  forDocuments(
+    collection: string,
+    args?: MediaForDocumentsArgs,
+  ): Promise<Map<string, MediaDocumentUsage[]>>;
+  /**
+   * Where a file or one of its sizes is served. Synchronous: it is
+   * arithmetic on the configuration and the record, never a storage call.
+   * Uses `uploads.publicPath` when the deployment has one.
+   */
+  url(media: MediaUrlInput, options?: MediaUrlOptions): string;
+  /** The declared sizes that keep the file's shape, as a `srcset`; null when there is no choice. */
+  srcset(media: MediaUrlInput, options?: MediaSrcsetOptions): string | null;
+  /** `src`, `srcset`, `width`, `height` and `alt` for an `<img>`. */
+  image(media: MediaImageInput, options?: MediaImageOptions): MediaImage;
+  /**
+   * A rich-text value as HTML (or Markdown, or text), with every library
+   * image resolved: its public URL, its dimensions, a `srcset` of the
+   * declared sizes, lazy loading, and the library's alt text where the
+   * editor left the node's empty. One query for all the images.
+   */
+  renderRichText(
+    value: unknown,
+    options?: MediaRichTextOptions,
+  ): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------

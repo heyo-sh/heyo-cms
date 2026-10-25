@@ -25,6 +25,13 @@ export interface HandlerLike {
 
 export interface RequestEventLike {
   request: Request;
+  /** `adapter-cloudflare` puts the execution context at `platform.ctx`. */
+  platform?: unknown;
+}
+
+export interface SvelteKitHandlerOptions {
+  /** For a platform whose `waitUntil` is not on `event.platform`. */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 export type SvelteKitRoute = (event: RequestEventLike) => Promise<Response>;
@@ -38,8 +45,21 @@ export interface SvelteKitRouteHandlers {
   fallback: SvelteKitRoute;
 }
 
-export function cmsHandler(cms: HandlerLike): SvelteKitRouteHandlers {
-  const handle: SvelteKitRoute = ({ request }) => cms.handler(request);
+export function cmsHandler(
+  cms: HandlerLike,
+  options: SvelteKitHandlerOptions = {},
+): SvelteKitRouteHandlers {
+  const handle: SvelteKitRoute = ({ request, platform }) => {
+    const ctx = (
+      platform as
+        | { ctx?: { waitUntil?: (promise: Promise<unknown>) => void } }
+        | undefined
+    )?.ctx;
+    const waitUntil =
+      options.waitUntil ??
+      (typeof ctx?.waitUntil === "function" ? ctx.waitUntil.bind(ctx) : undefined); // prettier-ignore
+    return cms.handler(request, waitUntil ? { waitUntil } : undefined);
+  };
   return {
     GET: handle,
     POST: handle,

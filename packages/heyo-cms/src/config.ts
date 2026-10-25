@@ -149,6 +149,16 @@ export function heyoCms<
   });
 
   const listeners = new Map<string, Set<CmsEventListener>>();
+  // A plugin's listeners are subscribed before anything can commit, so the
+  // first event after start-up reaches them like every later one.
+  for (const plugin of resolved.plugins) {
+    for (const [type, listener] of Object.entries(plugin.events ?? {})) {
+      if (!listener) continue;
+      const existing = listeners.get(type) ?? new Set<CmsEventListener>();
+      existing.add(listener);
+      listeners.set(type, existing);
+    }
+  }
   let adapter: DatabaseAdapter | undefined;
   let pending: Promise<DatabaseAdapter> | undefined;
 
@@ -279,7 +289,7 @@ export function heyoCms<
     _config: Object.freeze(resolved),
     schema,
     collections: config.collections,
-    handler: (request: Request) => httpLayer().handler(request),
+    handler: (request, options) => httpLayer().handler(request, options),
     _router: { routes: () => httpLayer().routes() },
     api: engine.buildApi() as unknown as LocalApi<TCollections>,
     globals: engine.buildGlobals() as unknown as GlobalsApi<TGlobals>,
@@ -437,7 +447,7 @@ function resolveConfig(
   validateI18n(config);
   validateRbac(config);
   validateAuth(config);
-  validateUploads(config);
+  validateUploads(config, basePath);
   validateAi(config);
   validateWebhooks(config);
 
@@ -453,7 +463,17 @@ function resolveConfig(
     },
     ...(config.rbac === undefined ? {} : { rbac: config.rbac }),
     i18n: resolveI18n(config.i18n),
-    ...(config.uploads === undefined ? {} : { uploads: config.uploads }),
+    ...(config.uploads === undefined
+      ? {}
+      : {
+          uploads:
+            config.uploads.publicPath === undefined
+              ? config.uploads
+              : {
+                  ...config.uploads,
+                  publicPath: trimTrailingSlashes(config.uploads.publicPath.trim()), // prettier-ignore
+                },
+        }),
     ...(config.ai === undefined ? {} : { ai: config.ai }),
     ...(config.webhooks === undefined ? {} : { webhooks: config.webhooks }),
     trash: {
@@ -870,7 +890,7 @@ function validatePlugins(plugins: CmsPlugin<unknown>[]): void {
   const routes = new Map<string, string>();
   for (const plugin of plugins) {
     for (const route of plugin.routes ?? []) {
-      const key = `${route.method} ${route.path}`;
+      const key = `${route.method} ${route.root === true ? "(root) " : ""}${route.path}`;
       const owner = routes.get(key);
       if (owner) {
         throw new CmsConfigError(
@@ -1009,9 +1029,14 @@ function validateAuth(
 
 function validateUploads(
   config: HeyoCmsConfig<CollectionsConfig, GlobalsConfig>,
+  basePath: string,
 ): void {
   const uploads = config.uploads;
   if (!uploads) return;
+
+  if (uploads.publicPath !== undefined) {
+    validatePublicPath(uploads.publicPath, basePath);
+  }
 
   if (uploads.limits?.maxFileSize) {
     parseByteSize(uploads.limits.maxFileSize, "uploads.limits.maxFileSize");
@@ -1083,6 +1108,36 @@ function validateUploads(
         `${needs} has to render pixels, and nothing here can. Add a processor from "@heyo-sh/heyo-cms/uploads" (sharpImages() on Node, cloudflareImages() on Workers), or drop the option.`,
       );
     }
+  }
+}
+
+/**
+ * `uploads.publicPath`: a plain absolute path the API does not already own.
+ *
+ * Inside `basePath` it would shadow the API's own `/media/:id/:size` route —
+ * or be shadowed by it, depending on which was matched first — and a URL
+ * that means two things is a bug report nobody can reproduce.
+ */
+function validatePublicPath(value: string, basePath: string): void {
+  const path = trimTrailingSlashes(value.trim());
+  const at = "uploads.publicPath";
+  if (path.length === 0 && value.trim().startsWith("/")) {
+    throw new CmsConfigError(at, 'cannot be "/"; use a path such as "/media"');
+  }
+  if (!path.startsWith("/")) throw new CmsConfigError(at, 'must start with "/"'); // prettier-ignore
+  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(path)) {
+    throw new CmsConfigError(
+      at,
+      "may only contain letters, digits, dots, dashes, underscores and tildes between slashes",
+    );
+  }
+  const within = (inner: string, outer: string) =>
+    inner === outer || inner.startsWith(`${outer}/`);
+  if (within(path, basePath) || within(basePath, path)) {
+    throw new CmsConfigError(
+      at,
+      `"${path}" overlaps basePath "${basePath}"; files are served from <basePath>/media already — pick a path outside it, such as "/media"`,
+    );
   }
 }
 

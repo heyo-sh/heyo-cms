@@ -14,7 +14,11 @@ import { aiRoutes } from "./routes/ai";
 import { generateRoutes } from "./routes/generate";
 import { authRoutes } from "./routes/auth";
 import { documentRoutes, globalRoutes } from "./routes/documents";
-import { mediaCollectRoute, mediaRoutes } from "./routes/media";
+import {
+  mediaCollectRoute,
+  mediaRoutes,
+  publicMediaRoutes,
+} from "./routes/media";
 import { panelRoutes } from "./routes/panel";
 import {
   activityRoutes,
@@ -63,10 +67,17 @@ export function createCmsHttp(cms: CmsInstance): CmsHttp {
     return document;
   };
 
+  // Routes matched against the whole URL path rather than below `basePath`:
+  // the public media path and a plugin's fixed-address files.
+  const rootRouter = new Router();
+  for (const route of publicMediaRoutes(cms)) rootRouter.add(route);
+
   for (const route of coreRoutes(cms)) router.add(route);
   for (const plugin of config.plugins) {
     for (const route of plugin.routes ?? []) {
-      router.add(pluginRoute(plugin.id, route));
+      (route.root === true ? rootRouter : router).add(
+        pluginRoute(plugin.id, route),
+      );
     }
   }
   // Last, so the document it describes contains every other route; the
@@ -76,9 +87,41 @@ export function createCmsHttp(cms: CmsInstance): CmsHttp {
   const before = sortHooks(config.hooks?.before ?? []);
   const after = sortHooks(config.hooks?.after ?? []);
 
-  const handler: CmsHandler = async (request: Request) => {
+  const handler: CmsHandler = async (request, options) => {
+    const response = await handle(request);
+    // A write's events are delivered after the response on a runtime that
+    // would otherwise freeze first. Reads have nothing to deliver, and a
+    // drain costs a query, so only the methods that write ask for one.
+    if (options?.waitUntil && !safeMethods.has(request.method)) {
+      options.waitUntil(cms.drainEvents().catch(() => 0));
+    }
+    return response;
+  };
+
+  const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const path = stripBasePath(url.pathname, basePath);
+
+    // Outside `basePath` only: a root route is a file at a fixed address,
+    // and must never be able to answer in the API's place.
+    if (
+      path === null &&
+      rootRouter.match(request.method, url.pathname).kind !== "not-found"
+    ) {
+      try {
+        return await dispatch({
+          cms,
+          router: rootRouter,
+          request,
+          url,
+          path: url.pathname,
+          actor: null,
+          meta: {},
+        });
+      } catch (error) {
+        return errorResponse(error);
+      }
+    }
 
     if (path === null) {
       // The catch-all is mounted somewhere else, or the application
@@ -135,10 +178,12 @@ export function createCmsHttp(cms: CmsInstance): CmsHttp {
 
   return {
     handler,
-    routes: () => router.routes(basePath),
+    routes: () => [...router.routes(basePath), ...rootRouter.routes("")],
     openapi,
   };
 }
+
+const safeMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
 interface DispatchOptions {
   cms: CmsInstance;

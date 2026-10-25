@@ -117,7 +117,11 @@ export async function collectOne(
   now: Date,
 ): Promise<CollectOutcome> {
   const storage = await context.storage();
-  const media = toMediaDocument(row, storage);
+  const media = toMediaDocument(
+    row,
+    storage,
+    context.config.uploads?.publicPath,
+  );
 
   const claimed = await transaction(context, async (tx, db) => {
     const used = await db.find(mediaUsagesTable, eq("media_id", media.id));

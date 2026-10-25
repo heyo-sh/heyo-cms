@@ -167,7 +167,23 @@ export interface CmsInspection {
  * `Request → Response`, so a framework adapter is a wrapper around this and
  * nothing more (section 10).
  */
-export type CmsHandler = (request: Request) => Promise<Response>;
+export type CmsHandler = (
+  request: Request,
+  options?: CmsHandlerOptions,
+) => Promise<Response>;
+
+/** What a framework adapter may hand the handler besides the request. */
+export interface CmsHandlerOptions {
+  /**
+   * The platform's way to keep working after the response: Cloudflare's
+   * `ctx.waitUntil`, Vercel's `waitUntil`. With it, the events a write
+   * produced are delivered before the runtime freezes — webhooks, listeners,
+   * plugins such as `indexNow()` — instead of on the next request or the
+   * next cron. Without it, delivery is still started in the background,
+   * which is all a long-running server needs.
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
+}
 
 /** The internal router, exposed for tests and inspection. */
 export interface CmsRouter {

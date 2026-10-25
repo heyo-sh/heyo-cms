@@ -30,8 +30,21 @@ export interface NextRouteHandlers {
   OPTIONS: CmsHandler;
 }
 
-export function cmsHandler(cms: HandlerLike): NextRouteHandlers {
-  const handle: CmsHandler = (request) => cms.handler(request);
+export interface NextHandlerOptions {
+  /**
+   * `waitUntil` from `@vercel/functions`, or a function that reaches
+   * OpenNext's `getCloudflareContext().ctx.waitUntil`: delivers a write's
+   * events before the function is frozen.
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+export function cmsHandler(
+  cms: HandlerLike,
+  options: NextHandlerOptions = {},
+): NextRouteHandlers {
+  const settings = options.waitUntil ? { waitUntil: options.waitUntil } : undefined; // prettier-ignore
+  const handle: CmsHandler = (request) => cms.handler(request, settings);
   return {
     GET: handle,
     POST: handle,

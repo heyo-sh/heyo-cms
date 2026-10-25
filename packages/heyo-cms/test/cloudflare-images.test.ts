@@ -189,7 +189,7 @@ describe("cloudflareTransform", () => {
     });
     expect(result).toEqual({
       options: {
-        trim: { left: 350, top: 100, right: 250, bottom: 300 },
+        trim: { top: 100, left: 350, width: 400, height: 400 },
         width: 200,
         height: 200,
         fit: "cover",
@@ -203,7 +203,7 @@ describe("cloudflareTransform", () => {
     expect(
       plan([1000, 800], { crop: { x: 200, y: 100, width: 600, height: 400 } }),
     ).toEqual({
-      options: { trim: { left: 200, top: 100, right: 200, bottom: 300 } },
+      options: { trim: { top: 100, left: 200, width: 600, height: 400 } },
       width: 600,
       height: 400,
     });

@@ -21,6 +21,16 @@ export interface HandlerLike {
 
 export interface DataFunctionArgs {
   request: Request;
+  /**
+   * The load context. On Cloudflare the template puts the Worker's execution
+   * context at `context.cloudflare.ctx`, and its `waitUntil` is used.
+   */
+  context?: unknown;
+}
+
+export interface ReactRouterHandlerOptions {
+  /** For a platform whose `waitUntil` is not in the load context. */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 export type DataFunction = (args: DataFunctionArgs) => Promise<Response>;
@@ -30,7 +40,20 @@ export interface ReactRouterRouteHandlers {
   action: DataFunction;
 }
 
-export function cmsHandler(cms: HandlerLike): ReactRouterRouteHandlers {
-  const handle: DataFunction = ({ request }) => cms.handler(request);
+export function cmsHandler(
+  cms: HandlerLike,
+  options: ReactRouterHandlerOptions = {},
+): ReactRouterRouteHandlers {
+  const handle: DataFunction = ({ request, context }) => {
+    const ctx = (
+      context as
+        | { cloudflare?: { ctx?: { waitUntil?: (promise: Promise<unknown>) => void } } } // prettier-ignore
+        | undefined
+    )?.cloudflare?.ctx;
+    const waitUntil =
+      options.waitUntil ??
+      (typeof ctx?.waitUntil === "function" ? ctx.waitUntil.bind(ctx) : undefined); // prettier-ignore
+    return cms.handler(request, waitUntil ? { waitUntil } : undefined);
+  };
   return { loader: handle, action: handle };
 }

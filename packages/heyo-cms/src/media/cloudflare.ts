@@ -139,8 +139,11 @@ export interface CloudflarePlan {
  * The crop and the focal point are resolved here rather than delegated:
  * `sourceRegion` already turns both into a single rectangle of the original
  * (the exact logic the sharp processor uses, tested in isolation), and that
- * rectangle becomes a `trim` — pixels removed from each edge — which is the
- * form Cloudflare accepts.
+ * rectangle becomes a `trim`. It is sent as an origin and a size —
+ * `{ top, left, width, height }` — rather than as four margins: the size is
+ * what the rest of the plan is computed from, and stating it means the
+ * service cannot round its way to a rectangle one pixel off the one the
+ * dimensions were reported for.
  *
  * The fit names do not line up one to one, and two of them are false friends:
  *
@@ -166,10 +169,10 @@ export function cloudflareTransform(
   const sourceHeight = region?.height ?? info.height;
   if (region) {
     options.trim = {
-      left: region.left,
       top: region.top,
-      right: info.width - region.left - region.width,
-      bottom: info.height - region.top - region.height,
+      left: region.left,
+      width: region.width,
+      height: region.height,
     };
   }
 

@@ -22,7 +22,17 @@ import { pngFixture, svgFixture, webpFixture } from "./images";
  * path a Worker takes, minus workerd.
  */
 
-function emulatedBinding(): CloudflareImagesBinding & { renders: number } {
+/** What the binding throws once an account has used its free transformations. */
+function quotaExceeded(): Error {
+  return Object.assign(
+    new Error("IMAGES_TRANSFORM_ERROR 9422: transformation limit exceeded"),
+    { code: 9422 },
+  );
+}
+
+function emulatedBinding(
+  quota: { exhausted?: () => boolean } = {},
+): CloudflareImagesBinding & { renders: number } {
   const state = { renders: 0 };
   const binding: CloudflareImagesBinding = {
     input(stream) {
@@ -33,6 +43,7 @@ function emulatedBinding(): CloudflareImagesBinding & { renders: number } {
           return transformer;
         },
         async output(output: Record<string, unknown>) {
+          if (quota.exhausted?.()) throw quotaExceeded();
           state.renders++;
           const input = new Uint8Array(
             await new Response(stream).arrayBuffer(),
@@ -43,11 +54,18 @@ function emulatedBinding(): CloudflareImagesBinding & { renders: number } {
 
           for (const step of options) {
             const trim = step.trim as
-              | { left: number; top: number; right: number; bottom: number }
+              | { left: number; top: number; width: number; height: number }
               | undefined;
             if (trim) {
-              width -= trim.left + trim.right;
-              height -= trim.top + trim.bottom;
+              // The region must lie inside the image, as the service requires.
+              if (
+                trim.left + trim.width > width ||
+                trim.top + trim.height > height
+              ) {
+                throw new Error("emulator: trim outside the image");
+              }
+              width = trim.width;
+              height = trim.height;
             }
             const w = step.width as number | undefined;
             const h = step.height as number | undefined;
@@ -239,6 +257,59 @@ describe("cloudflareImages through the media pipeline", () => {
     });
     expect([thumb?.width, thumb?.height]).toEqual([320, 320]);
     await bytesOf(thumb!.body);
+    await cms.close();
+  });
+
+  test("a spent quota (9422) degrades to originals and recovers on its own", async () => {
+    let exhausted = true;
+    const binding = emulatedBinding({ exhausted: () => exhausted });
+    const { cms, storage } = await setup(binding);
+    const failures: string[] = [];
+    cms.on("media.processing.failed", (event) => {
+      failures.push(`${String(event.data.variant)}: ${String(event.data.error)}`); // prettier-ignore
+    });
+
+    // The upload is not refused: the PNG is stored as it came.
+    const file = await cms.media.upload({
+      file: pngFixture(1200, 800),
+      filename: "photo.png",
+      contentType: "image/png",
+    });
+    expect(file.mimeType).toBe("image/png");
+
+    // The page gets the original for a size, and nothing is stored for it.
+    const card = await cms.media.variant({ id: file.id, variant: "card" });
+    expect(card?.key).toBe(file.storageKey);
+    expect(card?.processingError).toContain("9422");
+    await bytesOf(card!.body);
+    await cms.drainEvents();
+    expect(failures).toEqual([
+      "null: IMAGES_TRANSFORM_ERROR 9422: transformation limit exceeded (9422)",
+      "card: IMAGES_TRANSFORM_ERROR 9422: transformation limit exceeded (9422)",
+    ]);
+
+    // Next month: the same request renders and stores the size.
+    exhausted = false;
+    const renewed = await cms.media.variant({ id: file.id, variant: "card" });
+    expect(renewed?.processingError).toBeNull();
+    expect(renewed?.contentType).toBe("image/webp");
+    expect([renewed?.width, renewed?.height]).toEqual([768, 512]);
+    expect(await storage.head?.(renewed!.key)).not.toBeNull();
+    await bytesOf(renewed!.body);
+    await cms.close();
+  });
+
+  test("a WebP upload is stored as it is, not re-encoded", async () => {
+    const binding = emulatedBinding();
+    const { cms } = await setup(binding);
+    const bytes = webpFixture(1200, 800);
+    const file = await cms.media.upload({
+      file: bytes,
+      filename: "diagram.webp",
+      contentType: "image/webp",
+    });
+    expect(binding.renders).toBe(0);
+    expect(file.size).toBe(bytes.byteLength);
     await cms.close();
   });
 

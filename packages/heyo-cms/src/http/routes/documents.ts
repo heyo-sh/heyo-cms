@@ -10,6 +10,7 @@ import {
   renderDocumentRichText,
   renderPageRichText,
   richTextFormat,
+  richTextMediaResolver,
 } from "../rich-text";
 import {
   json,
@@ -120,7 +121,18 @@ export function documentRoutes(cms: CmsInstance): RouteRecord[] {
           );
           const format = richTextFormat(context.query.get("richText"));
           if (format) {
-            renderPageRichText(page.docs, { collection, format, mediaUrl });
+            const mediaImage = await richTextMediaResolver(
+              cms,
+              page.docs,
+              collection,
+              context.query.get("locale"),
+            );
+            renderPageRichText(page.docs, {
+              collection,
+              format,
+              mediaUrl,
+              ...(mediaImage === undefined ? {} : { mediaImage }),
+            });
           }
           return json(page);
         },
@@ -193,7 +205,18 @@ export function documentRoutes(cms: CmsInstance): RouteRecord[] {
           }
           const format = richTextFormat(context.query.get("richText"));
           if (format) {
-            renderDocumentRichText(document, { collection, format, mediaUrl });
+            const mediaImage = await richTextMediaResolver(
+              cms,
+              [document],
+              collection,
+              context.query.get("locale"),
+            );
+            renderDocumentRichText(document, {
+              collection,
+              format,
+              mediaUrl,
+              ...(mediaImage === undefined ? {} : { mediaImage }),
+            });
           }
           return json(document);
         },
@@ -419,10 +442,17 @@ export function globalRoutes(cms: CmsInstance): RouteRecord[] {
           );
           const format = richTextFormat(context.query.get("richText"));
           if (format) {
+            const mediaImage = await richTextMediaResolver(
+              cms,
+              [document],
+              global,
+              context.query.get("locale"),
+            );
             renderDocumentRichText(document, {
               collection: global,
               format,
               mediaUrl,
+              ...(mediaImage === undefined ? {} : { mediaImage }),
             });
           }
           return json(document);
