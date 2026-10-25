@@ -256,11 +256,9 @@ export function splitLocales(
       continue;
     }
     if (!isObject(value)) {
-      // A field that used not to be localized still has a bare value in an
-      // older dump. Treating it as the default language is the only reading
-      // that does not lose it.
-      base[name] = value;
-      continue;
+      throw new Error(
+        `${name} is localized, but the file holds one value instead of one per language`,
+      );
     }
     for (const [locale, translated] of Object.entries(value)) {
       if (translated === undefined) continue;

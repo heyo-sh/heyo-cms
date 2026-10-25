@@ -64,9 +64,9 @@ confirmation, and the regular field validator checks it on save; AI is not a
 reliable way to guarantee a unique slug. For a deterministic slug use a
 `create.before` hook instead.
 
-The older `ai: { generate: … }` form remains supported for existing projects,
-but cannot be used together with `aiGenerate` on the same field. Other legacy
-field actions such as `translate` still use `ai` for now.
+Generation is only `aiGenerate`. The field's other actions — `translate`,
+`improve`, `summarize`, `alt`, `tags` or a custom one — are keys of its `ai`
+map; `ai: { generate }` is refused.
 
 ```
 POST /posts/:id/ai/:field/:action     an existing document

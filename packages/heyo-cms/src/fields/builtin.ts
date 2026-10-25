@@ -71,7 +71,7 @@ export const text = defineField<string, TextOptions>({
     type: "text",
     ...(options.default === undefined ? {} : { default: options.default }),
   }),
-  aiActions: ["generate", "improve", "summarize", "translate"],
+  aiActions: ["improve", "summarize", "translate"],
 });
 
 export interface TextareaOptions extends TextOptions {
@@ -90,7 +90,7 @@ export const textarea = defineField<string, TextareaOptions>({
       ? z.string()
       : z.string().max(options.maxLength),
   column: () => ({ type: "text" }),
-  aiActions: ["generate", "improve", "summarize", "translate"],
+  aiActions: ["improve", "summarize", "translate"],
 });
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ export const richText = defineField<RichTextValue, RichTextOptions>({
   schema: () =>
     z.looseObject({ type: z.string() }) as unknown as z.ZodType<RichTextValue>,
   column: () => ({ type: "json" }),
-  aiActions: ["generate", "improve", "summarize", "translate"],
+  aiActions: ["improve", "summarize", "translate"],
 });
 
 // ---------------------------------------------------------------------------
@@ -335,13 +335,23 @@ const relationBuilder = defineField<string, RelationOptions>({
     relationTo: z.string().min(1),
     many: z.boolean().optional(),
   }) as unknown as z.ZodType<RelationOptions>,
-  schema: () => z.string().min(1),
+  // The same shape as the column: one id, or with `many` the list of them
+  // that is stored as JSON and that `depth` resolves into documents.
+  schema: (options) =>
+    (options.many === true
+      ? z.array(z.string().min(1))
+      : z.string().min(1)) as unknown as z.ZodType<string>,
   column: (options) => ({
     type: "text",
     ...(options.many === true ? { type: "json" as const, array: true } : {}),
   }),
   aiActions: ["tags"],
 });
+
+/** The stored value of a relation: a list of ids with `many: true`, one id otherwise. */
+type RelationValue<TOptions> = TOptions extends { many: true }
+  ? string[]
+  : string;
 
 /**
  * A reference to another collection.
@@ -353,11 +363,13 @@ const relationBuilder = defineField<string, RelationOptions>({
 export function relation<const TOptions extends RelationOptions>(
   to: string,
   options?: TOptions,
-): FieldDefinition<FieldValue<string, TOptions>> {
+): FieldDefinition<FieldValue<RelationValue<TOptions>, TOptions>> {
   return relationBuilder({
     ...(options ?? {}),
     relationTo: to,
-  } as TOptions) as unknown as FieldDefinition<FieldValue<string, TOptions>>;
+  } as TOptions) as unknown as FieldDefinition<
+    FieldValue<RelationValue<TOptions>, TOptions>
+  >;
 }
 
 // ---------------------------------------------------------------------------

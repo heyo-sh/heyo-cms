@@ -128,12 +128,6 @@ export function defineField<TValue, TOptions extends FieldOptions>(
 
     validateAiActions(type.name, type.aiActions, given.ai);
     if (given.aiGenerate !== undefined) {
-      if (given.ai?.generate !== undefined) {
-        throw new CmsConfigError(
-          `fields.${type.name}.aiGenerate`,
-          "choose either aiGenerate or the legacy ai.generate, not both",
-        );
-      }
       if (
         !["text", "textarea", "richText", "email", "url"].includes(type.name)
       ) {
@@ -213,7 +207,14 @@ function validateAiActions(
   aiActions: string[] | undefined,
   ai: FieldAiConfig | undefined,
 ): void {
-  if (!ai || !aiActions) return;
+  if (!ai) return;
+  if (ai.generate !== undefined) {
+    throw new CmsConfigError(
+      `fields.${name}.ai.generate`,
+      "generation is configured with aiGenerate, not as an ai action",
+    );
+  }
+  if (!aiActions) return;
   for (const action of Object.keys(ai)) {
     const builtIn = aiActions.includes(action);
     const custom = typeof ai[action] === "object";

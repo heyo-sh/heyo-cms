@@ -59,6 +59,7 @@ const collections = () => ({
       views: number({ integer: true }),
       tags: multiselect({ options: ["news", "guide"] }),
       author: relation("authors"),
+      contributors: relation("authors", { many: true }),
     },
   }),
 });
@@ -332,6 +333,40 @@ function runEngineSuite(entry: EngineUnderTest): void {
       // One for the posts, one for all five authors, one for the team. Five
       // posts would cost eleven queries with a naive loader.
       expect(spent).toBe(3);
+      await cms.close();
+    });
+
+    test("a many relation stores a list of ids and resolves it in order", async () => {
+      const { cms } = await setup();
+      const ada = await cms.api.authors.create({ data: { name: "Ada" } });
+      const bo = await cms.api.authors.create({ data: { name: "Bo" } });
+      const ids = [String(bo?.id), String(ada?.id)];
+
+      // Typed as a list of ids, and validated as one on every write.
+      const post = await cms.api.posts.create({
+        data: { title: "Two hands", handle: "two-hands", contributors: ids },
+      });
+      expect(post?.contributors).toEqual(ids);
+
+      const read = await cms.api.posts.findById(String(post?.id), { depth: 1 });
+      const resolved = read?.contributors as unknown as JsonObject[];
+      expect(resolved.map((author) => author.name)).toEqual(["Bo", "Ada"]);
+
+      const updated = await cms.api.posts.update({
+        id: String(post?.id),
+        data: { contributors: [String(ada?.id)] },
+      });
+      expect(updated?.contributors).toEqual([String(ada?.id)]);
+
+      // One id where a list is stored is refused, not written as a string.
+      await expect(
+        cms.api.posts.update({
+          id: String(post?.id),
+          data: { contributors: String(ada?.id) as unknown as string[] },
+        }),
+      ).rejects.toBeInstanceOf(CmsError);
+      const unchanged = await cms.api.posts.findById(String(post?.id));
+      expect(unchanged?.contributors).toEqual([String(ada?.id)]);
       await cms.close();
     });
 

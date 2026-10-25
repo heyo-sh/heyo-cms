@@ -73,7 +73,7 @@ cannot be unique and are not indexed by the current implementation.
 media and other controls ignore it. `admin.hidden` removes the field from the
 shipped form (not from the API). A field with `admin.hidden: true` **cannot**
 have `required: true` — the configuration fails immediately, even if it has a
-default. The removed `width`, `position` and `condition` options are rejected.
+default. Any other `admin` option is rejected.
 None of these options is access control.
 
 ## Slugs

@@ -237,9 +237,7 @@ export function createAi(options: AiServiceOptions): CmsAi {
       }
 
       const configured =
-        args.action === "generate" && field.aiGenerate !== undefined
-          ? field.aiGenerate
-          : field.ai?.[args.action];
+        args.action === "generate" ? field.aiGenerate : field.ai?.[args.action];
       const variantTranslation =
         args.variantTranslation === true &&
         args.action === "translate" &&

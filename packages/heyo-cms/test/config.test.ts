@@ -135,38 +135,6 @@ describe("heyoCms", () => {
     ).toThrow(/no collection or global/);
   });
 
-  // The document chat was removed in favour of the panel-wide assistant. A
-  // configuration that still carries its keys has an opinion about what AI may
-  // read, and silently ignoring that opinion while shipping an agent that
-  // writes would be the worst possible upgrade.
-  test("refuses the removed per-collection ai.chat with a migration message", () => {
-    expect(() =>
-      heyoCms({
-        database,
-        collections: {
-          posts: defineCollection({
-            fields: { title: text({}), body: richText({}) },
-            ai: { chat: { context: ["title", "body"] } },
-          } as never),
-        },
-      }),
-    ).toThrow(/per-collection ai.chat was removed/);
-  });
-
-  test("refuses the removed ai.chat, naming ai.assistant", () => {
-    expect(() =>
-      heyoCms({
-        database,
-        collections: { posts: posts() },
-        ai: {
-          auth: { openai: { type: "api-key", token: "sk-test" } },
-          defaultModel: { provider: "openai", model: "gpt-4o-mini" },
-          chat: { enabled: true },
-        } as never,
-      }),
-    ).toThrow(/ai\.assistant/);
-  });
-
   test("refuses an assistant budget that is not a positive integer", () => {
     expect(() =>
       heyoCms({

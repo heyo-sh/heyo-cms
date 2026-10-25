@@ -27,7 +27,7 @@ import { jsonBody, okJson, pathParam, queryParam, ref } from "../spec";
  *   POST /ai/assistant                   (SSE)
  *   POST /ai/assistant/plans/:id/approve
  *
- * The per-field routes exist only when a field declares `aiGenerate` or a legacy `ai` action.
+ * The per-field routes exist only when a field declares `aiGenerate` or an `ai` action.
  * A deployment with no AI has no AI endpoints, which is what
  * `cms.inspect().routes` should say (section 8).
  */
@@ -635,7 +635,7 @@ function fieldAiSpec(
       pathParam("field", "Field name."),
       pathParam(
         "action",
-        "`generate` for aiGenerate, or a key of the legacy `ai` map.",
+        "`generate` for aiGenerate, or a key of the field's `ai` map.",
       ),
       queryParam("locale", "string", "Language the value is written in."),
       queryParam("sourceLocale", "string", "Language `translate` reads from."),
