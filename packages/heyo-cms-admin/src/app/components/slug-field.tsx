@@ -1,3 +1,4 @@
+import type { PanelField } from "@heyo-sh/heyo-cms/types";
 import { Button, Input, Text } from "@heyo-sh/heyo-ui";
 import { IconArrowBackUp, IconPlus, IconX } from "@tabler/icons-react";
 import { useState } from "react";
@@ -25,34 +26,53 @@ import type { FieldInputProps } from "./field-input";
 export function SlugField(props: FieldInputProps) {
   const { field, value, onChange, disabled, id } = props;
   const from = typeof field.options.from === "string" ? field.options.from : null; // prettier-ignore
-  const history = field.options.history === true;
 
   return (
-    <div className="space-y-2">
-      <Input
-        id={id}
-        type="text"
-        value={value === null || value === undefined ? "" : String(value)}
-        disabled={disabled}
-        aria-label={field.label}
-        spellCheck={false}
-        autoCapitalize="off"
-        placeholder={
-          field.admin.placeholder ??
-          (from ? `Made from ${from} when saved empty` : "lowercase-with-hyphens") // prettier-ignore
-        }
-        onChange={(event) => onChange(event.target.value || null)}
-      />
-      {history && props.collection && props.documentId ? (
-        <PreviousSlugs
-          collection={props.collection}
-          documentId={props.documentId}
-          field={field.name}
-          {...(props.locale === undefined ? {} : { locale: props.locale })}
-          disabled={disabled === true}
-        />
-      ) : null}
-    </div>
+    <Input
+      id={id}
+      type="text"
+      value={value === null || value === undefined ? "" : String(value)}
+      disabled={disabled}
+      aria-label={field.label}
+      spellCheck={false}
+      autoCapitalize="off"
+      placeholder={
+        field.admin.placeholder ??
+        (from ? `Made from ${from} when saved empty` : "lowercase-with-hyphens") // prettier-ignore
+      }
+      onChange={(event) => onChange(event.target.value || null)}
+    />
+  );
+}
+
+/**
+ * Rendered by the form under the field's row rather than inside the input,
+ * so the input keeps its row with the Generate button beside it.
+ */
+export function PreviousSlugsFor({
+  field,
+  collection,
+  documentId,
+  locale,
+  disabled,
+}: {
+  field: PanelField;
+  collection: string;
+  documentId: string | undefined;
+  locale: string;
+  disabled: boolean;
+}) {
+  if (field.type !== "slug" || field.options.history !== true || !documentId) {
+    return null;
+  }
+  return (
+    <PreviousSlugs
+      collection={collection}
+      documentId={documentId}
+      field={field.name}
+      locale={locale}
+      disabled={disabled}
+    />
   );
 }
 
@@ -118,7 +138,7 @@ function PreviousSlugs({
 
   const entries = list.data ?? [];
   return (
-    <div className="space-y-1.5" aria-label="Previous slugs">
+    <div className="mt-2 space-y-1.5" aria-label="Previous slugs">
       <Text size="xs" tone="subtle">
         Previous slugs — old addresses that still lead here
       </Text>
