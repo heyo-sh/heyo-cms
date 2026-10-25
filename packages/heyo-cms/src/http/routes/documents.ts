@@ -404,8 +404,180 @@ export function documentRoutes(cms: CmsInstance): RouteRecord[] {
         },
       },
     );
+    routes.push(...slugRoutes(collection, operations));
   }
 
+  return routes;
+}
+
+const previousSlugSchema: JsonObject = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      slug: { type: "string" },
+      field: { type: "string" },
+      locale: { type: ["string", "null"] },
+      createdAt: { type: ["string", "null"], format: "date-time" },
+    },
+  },
+};
+
+/**
+ * Slug lookups and previous addresses, for a collection with a `slug` field.
+ *
+ * `resolve-slug` is a static segment, so it wins over `/:id` in the router;
+ * an id is never a slug-shaped word, because the engine generates ids.
+ */
+function slugRoutes(
+  collection: ResolvedCollection,
+  operations: CollectionApi<JsonObject>,
+): RouteRecord[] {
+  const fields = Object.entries(collection.fields).filter(
+    ([, field]) => field.type === "slug",
+  );
+  if (fields.length === 0) return [];
+  const base = `/${collection.slug}`;
+  const tags = [collection.slug];
+  const withHistory = fields.some(([, field]) => field.options.history === true); // prettier-ignore
+  const fieldParam = queryParam("field", "string", "The slug field; the first one by default."); // prettier-ignore
+
+  const routes: RouteRecord[] = [
+    {
+      method: "GET",
+      path: `${base}/resolve-slug`,
+      source: "core",
+      handler: async (context) => {
+        const slug = context.query.get("slug");
+        if (!slug) throw CmsError.validation('"slug" is required.');
+        const field = context.query.get("field");
+        const resolved = await operations.resolveSlug(slug, {
+          ...readArgs(context.query, {
+            actor: context.actor,
+            source: requestSource(context.request),
+          }),
+          ...(field === null ? {} : { field }),
+        });
+        if (!resolved) throw CmsError.notFound(`No ${collection.name} has the slug "${slug}".`); // prettier-ignore
+        return json(resolved);
+      },
+      openapi: {
+        summary: `Find a ${collection.label} by its slug, now or before`,
+        description:
+          "`current: false` means the slug is a previous address of the document: redirect to its slug now. `locale` is where the slug matched.",
+        tags,
+        parameters: [
+          { ...queryParam("slug", "string", "The slug from the URL."), required: true }, // prettier-ignore
+          fieldParam,
+          ...localeParams,
+          depthParam,
+        ],
+        responses: {
+          "200": okJson(
+            {
+              type: "object",
+              properties: {
+                id: { type: "string" },
+                field: { type: "string" },
+                locale: { type: ["string", "null"] },
+                current: { type: "boolean" },
+                document: ref(schemaName(collection)),
+              },
+            },
+            "Where the slug leads.",
+          ),
+          "404": okJson(ref("Error"), "No readable document has this slug."),
+        },
+      },
+    },
+  ];
+  if (!withHistory) return routes;
+
+  const args = (context: Parameters<RouteRecord["handler"]>[0]) => {
+    const locale = context.query.get("locale");
+    const field = context.query.get("field");
+    return {
+      actor: context.actor,
+      source: requestSource(context.request),
+      id: requireId(context.params.id),
+      ...(locale === null ? {} : { locale }),
+      ...(field === null ? {} : { field }),
+    };
+  };
+
+  routes.push(
+    {
+      method: "GET",
+      path: `${base}/:id/previous-slugs`,
+      source: "core",
+      handler: async (context) =>
+        json(await operations.previousSlugs(args(context))),
+      openapi: {
+        summary: `List a ${collection.label}'s previous slugs`,
+        tags,
+        parameters: [pathParam("id", "Document id."), fieldParam, ...localeParams], // prettier-ignore
+        responses: { "200": okJson(previousSlugSchema, "Newest first.") },
+      },
+    },
+    {
+      method: "POST",
+      path: `${base}/:id/previous-slugs`,
+      source: "core",
+      handler: async (context) => {
+        const body = await readJsonObject(context.request);
+        return json(
+          await operations.addPreviousSlug({
+            ...args(context),
+            slug: requireString(body, "slug"),
+            ...(typeof body.field === "string" ? { field: body.field } : {}),
+            ...(typeof body.locale === "string" ? { locale: body.locale } : {}),
+          }),
+          201,
+        );
+      },
+      openapi: {
+        summary: `Make a slug lead to this ${collection.label}`,
+        description:
+          "How two pages are merged: add the old page's slug here, then trash the old page. 409 when the slug is another document's address or already leads elsewhere.",
+        tags,
+        parameters: [pathParam("id", "Document id."), ...localeParams],
+        requestBody: jsonBody({
+          type: "object",
+          required: ["slug"],
+          properties: {
+            slug: { type: "string" },
+            field: { type: "string" },
+            locale: { type: "string" },
+          },
+        }),
+        responses: {
+          "201": okJson(previousSlugSchema, "The previous slugs now."),
+          "409": okJson(ref("Error"), "The slug is taken."),
+        },
+      },
+    },
+    {
+      method: "DELETE",
+      path: `${base}/:id/previous-slugs`,
+      source: "core",
+      handler: async (context) => {
+        const slug = context.query.get("slug");
+        if (!slug) throw CmsError.validation('"slug" is required.');
+        return json(await operations.removePreviousSlug({ ...args(context), slug })); // prettier-ignore
+      },
+      openapi: {
+        summary: `Stop a previous slug from leading to this ${collection.label}`,
+        tags,
+        parameters: [
+          pathParam("id", "Document id."),
+          { ...queryParam("slug", "string", "The previous slug."), required: true }, // prettier-ignore
+          fieldParam,
+          ...localeParams,
+        ],
+        responses: { "200": okJson(previousSlugSchema, "The previous slugs now.") }, // prettier-ignore
+      },
+    },
+  );
   return routes;
 }
 

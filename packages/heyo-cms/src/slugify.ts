@@ -129,7 +129,15 @@ export interface SlugifyOptions {
 export function slugify(input: string, options: SlugifyOptions = {}): string {
   const max = options.maxLength ?? 96;
   const transliterated = Array.from(input.toLowerCase())
-    .map((char) => latin[char] ?? cyrillic[char] ?? greek[char] ?? char)
+    .map(
+      (char) =>
+        latin[char] ??
+        cyrillic[char] ??
+        // Greek accents (έ, ΐ) come off before the lookup; Cyrillic ones may
+        // not, because й and ї are letters of their own, not и and і.
+        greek[char.normalize("NFD").replace(/[\u0300-\u036f]/g, "")] ??
+        char,
+    )
     .join("");
 
   const slug = transliterated

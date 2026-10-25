@@ -71,6 +71,30 @@ A rolled-back write sends nothing. A committed one sends for certain, even if
 the process dies between the commit and the delivery — which is the entire
 reason for the table.
 
+On a serverless runtime the request can end, and the runtime freeze, before
+a background delivery finishes. The framework adapters hand it to the
+platform's `waitUntil` after every write — found by themselves on Cloudflare
+(`locals.cfContext` in Astro, `context.cloudflare.ctx` in React Router,
+`platform.ctx` in SvelteKit), or passed in: `cmsHandler(cms, { waitUntil })`.
+Without one, whatever is left is delivered by the next write or the next
+`cms.jobs.run()`.
+
+A plugin subscribes the same way, declaratively, so its listeners exist
+before the first write:
+
+```ts
+const plugin: CmsPlugin = {
+  id: "search-index",
+  events: {
+    "document.updated": async (event) => reindex(event.data.document),
+  },
+};
+```
+
+A listener that throws fails the delivery, which the outbox retries with
+backoff — and every listener sees the event again, so make them idempotent
+(`event.id` is stable).
+
 ## HTTP hooks
 
 ```ts

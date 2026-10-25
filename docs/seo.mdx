@@ -1,0 +1,106 @@
+---
+title: SEO
+description: Slugs that keep working, files at addresses made for the web, image sitemaps, and IndexNow after every publish.
+---
+
+# SEO
+
+The parts of search that belong to the CMS rather than to the site: a page's
+address, what happens when it changes, where its pictures live, and telling
+search engines that something changed. The URL structure, the structured data
+and the sitemap layout stay in the site, which is the only place that knows
+them.
+
+## Addresses that keep working
+
+A [`slug()` field](./fields.mdx#slugs) is made from the title once, cleaned,
+unique per language, and — with `history: true` — remembers every address the
+document had:
+
+```ts
+slug: slug({ from: "title", localized: true, history: true });
+```
+
+A page route looks the slug up, and redirects when it is an old address or
+one from another language:
+
+```ts
+const hit = await cms.api.posts.resolveSlug(slug, { locale, actor: reader });
+if (!hit) return new Response(null, { status: 404 });
+const now = hit.document.slug;
+if (now !== slug)
+  return Response.redirect(`${origin}/${locale}/blog/${now}`, 301);
+```
+
+Merging two posts is `addPreviousSlug()` on the one that stays, then a trash
+of the other: every link to the old post now lands on the new one, and
+neither a new post nor an editor can take the address by accident.
+
+## Files at addresses made for the web
+
+`uploads.publicPath` serves the library at `/media/<id>/<name>`, outside the
+API path a `robots.txt` closes, with names image search can read and a year
+of caching. `cms.media.image()` and `cms.media.renderRichText()` give every
+picture its dimensions and a `srcset` of the declared sizes. See
+[Media → Serving files](./media.mdx#serving-files).
+
+## Image sitemaps
+
+```ts
+const usage = await cms.media.forDocuments("posts");
+for (const [id, files] of usage) {
+  for (const locale of locales) {
+    const pictures = files
+      .filter((file) => file.locale === null || file.locale === locale)
+      .map((file) => new URL(file.media.url, origin).href);
+    // <image:image><image:loc>…</image:loc></image:image> per picture
+  }
+}
+```
+
+Two queries for the whole collection: the reference count the engine keeps
+for the media lifecycle already says which file is used where, per language.
+
+## IndexNow
+
+```ts
+import { indexNow } from "@heyo-sh/heyo-cms/plugins";
+
+plugins: [
+  indexNow({
+    key: () => env.INDEXNOW_KEY,
+    url: (post, { collection, locale }) =>
+      post.status === "published" && !post.noindex
+        ? `https://example.com/${locale}/blog/${post.slug}`
+        : null,
+    collections: ["posts"],
+    enabled: import.meta.env.PROD,
+  }),
+];
+```
+
+After every committed write to a public page — created, updated, trashed,
+restored, purged — Bing, Yandex, Seznam, Naver and the other engines that
+share the protocol are told to look at it again: the address it has now, and
+the one it had if the slug changed or the page stopped being public. Google
+does not take part; it reads the sitemap.
+
+- **After the commit.** The ping is an event listener, delivered from the
+  outbox: a rolled back save announces nothing. On a serverless runtime the
+  adapter hands the delivery to `waitUntil`, so it is not lost when the
+  request ends.
+- **The key file** has to be at the root of the host — `https://<host>/<key>.txt`
+  is how the engines check a submission, and only a file at the root covers
+  every URL. The plugin serves it; mount the handler on that path too:
+
+  ```ts
+  // src/pages/[key].txt.ts (Astro)
+  export const prerender = false;
+  export const { GET } = cmsHandler(cms);
+  ```
+
+- **Best effort.** A refused or failed submission is logged and dropped. The
+  document is saved; a search engine that did not answer is no reason to
+  replay the event to every other listener.
+- `enabled: false` (or a function returning it) for development and preview
+  deployments, which must not announce pages that do not exist publicly.

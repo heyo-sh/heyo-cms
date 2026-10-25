@@ -440,6 +440,7 @@ function resolveConfig(
   }
 
   assertUniqueSlugs({ ...collections, ...globals });
+  validateSlugFields({ ...collections, ...globals });
   validateRelations({ ...collections, ...globals });
   assertNoLegacyChat(config);
   validateHookTargets(config, collections, globals);
@@ -1107,6 +1108,39 @@ function validateUploads(
         "uploads.images.processor",
         `${needs} has to render pixels, and nothing here can. Add a processor from "@heyo-sh/heyo-cms/uploads" (sharpImages() on Node, cloudflareImages() on Workers), or drop the option.`,
       );
+    }
+  }
+}
+
+/**
+ * A `slug` field's `from` has to name a sibling that holds text: the mistake
+ * is otherwise silent — a slug that never fills in — and found by the first
+ * editor who wonders why.
+ */
+function validateSlugFields(
+  collections: Record<string, ResolvedCollection>,
+): void {
+  for (const collection of Object.values(collections)) {
+    for (const [name, field] of Object.entries(collection.fields)) {
+      if (field.type !== "slug") continue;
+      const from = field.options.from;
+      if (from === undefined) continue;
+      const source = collection.fields[String(from)];
+      const at = `collections.${collection.name}.fields.${name}.from`;
+      if (!source || from === name) {
+        throw new CmsConfigError(
+          at,
+          `"${String(from)}" is not another field of ${collection.name}`,
+        );
+      }
+      if (
+        !["text", "textarea", "email", "url", "select"].includes(source.type)
+      ) {
+        throw new CmsConfigError(
+          at,
+          `"${String(from)}" is a ${source.type} field; a slug is made from text`,
+        );
+      }
     }
   }
 }

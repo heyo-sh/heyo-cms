@@ -360,6 +360,35 @@ function collection(
         query: readQuery(args),
         ...headerInit(args),
       }) as Promise<never>,
+    resolveSlug: async (slug, { field, ...args } = {}) => {
+      try {
+        return (await request(`${base}/resolve-slug`, {
+          query: { ...readQuery(args), slug, field },
+          ...headerInit(args),
+        })) as never;
+      } catch (error) {
+        // "No such slug" is an answer, not a failure: the local API says
+        // null, and so does this.
+        if (error instanceof CmsError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    previousSlugs: ({ id: value, field, locale, ...args }) =>
+      request(`${id(value)}/previous-slugs`, {
+        query: { field, locale },
+        ...headerInit(args),
+      }) as Promise<never>,
+    addPreviousSlug: ({ id: value, slug, field, locale, ...args }) =>
+      request(`${id(value)}/previous-slugs`, {
+        ...jsonInit({ slug, field, locale }),
+        ...headerInit(args),
+      }) as Promise<never>,
+    removePreviousSlug: ({ id: value, slug, field, locale, ...args }) =>
+      request(`${id(value)}/previous-slugs`, {
+        method: "DELETE",
+        query: { slug, field, locale },
+        ...headerInit(args),
+      }) as Promise<never>,
   };
 }
 

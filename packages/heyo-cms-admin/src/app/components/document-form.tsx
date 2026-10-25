@@ -257,6 +257,9 @@ export function FieldRow({
               value={document[field.name]}
               document={document}
               disabled={readOnly}
+              collection={aiPrefix(collection)}
+              {...(documentId ? { documentId } : {})}
+              locale={locale}
               onChange={(next) => onChange(field.name, next)}
             />
           </div>

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { FieldDefinition, FieldOptions } from "../types/fields";
 import type { JsonObject, JsonValue } from "../types/json";
+import { slugify, slugPattern } from "../slugify";
 import { defineField, type FieldValue } from "./registry";
 
 // ---------------------------------------------------------------------------
@@ -358,27 +359,99 @@ export function relation<const TOptions extends RelationOptions>(
   } as TOptions) as unknown as FieldDefinition<FieldValue<string, TOptions>>;
 }
 
+// ---------------------------------------------------------------------------
+// slug
+// ---------------------------------------------------------------------------
+
+export interface SlugOptions extends FieldOptions {
+  /**
+   * The field a slug is made from while it is empty: `"title"`.
+   *
+   * Made once, on the write that first has a value for it, and then left
+   * alone: retitling a page must not move its URL. Clearing the slug makes
+   * it again. The same function is the panel's "Generate" button.
+   */
+  from?: string;
+  /**
+   * Keep every slug a document stops using as a previous address of it.
+   *
+   * `cms.api.<collection>.resolveSlug()` finds a document by a previous
+   * address too, which is what a 301 from an old URL is built on; a new
+   * document cannot take an address an old one still redirects from. Needs
+   * the `slug_history` table, which `heyo-cms generate` adds.
+   */
+  history?: boolean;
+  /** The longest slug produced; longer input is cut at a hyphen. 96 by default. */
+  maxLength?: number;
+  default?: string;
+}
+
+const slugBuilder = defineField<string, SlugOptions>({
+  name: "slug",
+  optionsSchema: commonOptions.extend({
+    from: z.string().min(1).optional(),
+    history: z.boolean().optional(),
+    maxLength: z.number().int().min(8).max(512).optional(),
+    default: z.string().optional(),
+  }) as unknown as z.ZodType<SlugOptions>,
+  schema: (options) =>
+    z
+      .string()
+      .max(options.maxLength ?? 96)
+      .regex(new RegExp(slugPattern), "lowercase letters, digits and single hyphens only"), // prettier-ignore
+  column: (options) => ({
+    type: "text",
+    ...(options.default === undefined ? {} : { default: options.default }),
+  }),
+});
+
 /**
- * There is no `slug` type, and that is deliberate.
+ * A URL slug: `"lodz-in-autumn"`.
  *
- * It was one of these for a while, and it earned its keep by being `text`
- * with `unique`, `index` and a hyphen pattern already set — plus a `from`
- * option that promised the value would be derived from another field and
- * never did it, because nothing in the engine generates one field out of
- * another. A type whose only feature is a default and a promise is a type
- * that teaches the wrong thing. A URL handle is a `text` field:
+ * What makes it more than `text` with a pattern is the engine, on every
+ * write path — the panel, the REST API, an import, a scheduled change:
+ *
+ * - a typed slug is cleaned (`"Łódź in Autumn!"` becomes `lodz-in-autumn`);
+ * - an empty one is made `from` another field, with `-2`, `-3`… until free;
+ * - it is unique within the collection — per language when localized, which
+ *   a database index cannot express, so the engine checks it, trashed
+ *   documents included;
+ * - with `history`, a changed slug stays a previous address of the document,
+ *   which `resolveSlug()` finds and nobody else may take.
  *
  * ```ts
- * handle: text({
- *   unique: true,
- *   index: true,
- *   pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
- * })
+ * slug: slug({ from: "title", localized: true, history: true })
  * ```
- *
- * and generating it from the title is a `create.before` hook, which runs
- * before validation precisely so that it can fill a required field.
  */
+export function slug<const TOptions extends SlugOptions>(
+  options?: TOptions,
+): FieldDefinition<FieldValue<string, TOptions>> {
+  const given: SlugOptions = { ...(options ?? {}) };
+  const localized = given.localized === true;
+  const max = given.maxLength;
+  const from = given.from;
+  return slugBuilder({
+    ...given,
+    // A localized field cannot carry a unique index (one index cannot cover
+    // languages that do not exist yet), so its uniqueness is the engine's
+    // per-language check alone; `unique: false` turns both off.
+    unique: localized ? (given.unique === false ? false : undefined) : (given.unique ?? true), // prettier-ignore
+    index: localized ? undefined : (given.index ?? true),
+    ...(given.generate === undefined && from !== undefined
+      ? {
+          generate: ({ fields }: { fields: JsonObject }) => {
+            const source = fields[from];
+            const made =
+              typeof source === "string"
+                ? slugify(source, max === undefined ? {} : { maxLength: max })
+                : "";
+            return made === "" ? null : made;
+          },
+        }
+      : {}),
+  } as TOptions) as unknown as FieldDefinition<FieldValue<string, TOptions>>;
+}
+
 export const email = defineField<string, TextOptions>({
   name: "email",
   optionsSchema: commonOptions as unknown as z.ZodType<TextOptions>,

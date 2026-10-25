@@ -29,6 +29,95 @@ await cms.api.posts.update({ id, data: { cover: file.id } });
 const thumb = await cms.media.variant({ id: file.id, variant: "thumb" });
 ```
 
+## Serving files
+
+With `uploads.publicPath`, the site serves its own files, outside the API:
+
+```ts
+uploads: { storage, images, publicPath: "/media" }
+```
+
+```
+/media/med_0mv…/condition-report.webp           the original
+/media/med_0mv…/card/condition-report.webp      a declared size
+```
+
+The CMS handler answers these paths; mount it there as well as on
+`basePath`. In Astro that is one more file:
+
+```ts
+// src/pages/media/[...path].ts
+import { cmsHandler } from "@heyo-sh/heyo-cms/astro";
+import { cms } from "../../../heyo-cms.config";
+
+export const prerender = false;
+export const { GET, HEAD } = cmsHandler(cms);
+```
+
+The id says which file and the middle segment which size. The name at the end
+is the uploaded file name as a slug, with the extension of what is actually
+served — for people and for image search, which reads it; the route ignores
+it, so renaming a file breaks no link. Answers carry an `ETag` and are
+cacheable for a year, because the bytes behind an id never change (a re-crop
+changes the checksum, and so the tag). An unknown id or size is a `404` before
+anything is read.
+
+Once `publicPath` is set, every URL the CMS produces for a file points there:
+`MediaDocument.url`, `cms.media.url()`, `srcset`s and rich text. Without it,
+files are served from `<basePath>/media/<id>/<size>`, which works but sits
+under the API path a `robots.txt` usually closes to crawlers.
+
+## On a page
+
+Everything an `<img>` needs is arithmetic on the configuration and the
+record — the processors never enlarge and the fits are deterministic — so it
+is known before any size has been rendered, and costs no request:
+
+```ts
+cms.media.url(file); // "/media/med_…/report.webp"
+cms.media.url(file, { variant: "card" }); // "/media/med_…/card/report.webp"
+cms.media.srcset(file); // ".../small/report.webp 480w, .../card/report.webp 800w, .../report.webp 1200w"
+cms.media.image(file, {
+  sizes: "(min-width: 768px) 680px, 100vw",
+  locale: "pl",
+});
+// { src, width, height, srcset, sizes, alt }
+```
+
+A `srcset` offers the declared sizes that keep the picture's shape (`inside`,
+`outside`, one-sided boxes) and the original at the top; a `cover` square is
+not the same picture and is left out unless you name it. Sizes wider than the
+file collapse into the original. With a crop, the original shows what the
+editor cut away, so the largest size takes its place.
+
+Rich text, with every library image resolved in one query:
+
+```ts
+const html = await cms.media.renderRichText(post.content, {
+  locale: "pl",
+  sizes: "(min-width: 768px) 680px, 100vw",
+});
+```
+
+Each image gets its public URL, `width` and `height` (no layout shift), a
+`srcset`, `loading="lazy"` and `decoding="async"`, and the library's alt text
+where the editor left the node's own empty. `?richText=html` on the REST API
+renders the same way. The plain `richTextToHtml()` is unchanged; pass
+`mediaImage` to it to do the same with files you loaded yourself.
+
+## Which files a page shows
+
+```ts
+const usage = await cms.media.forDocuments("posts");
+// Map<documentId, { media, field, locale }[]>
+```
+
+Read from `media_usages`, the reference count the engine already keeps, so
+the whole collection costs two queries. `locale` is null for a field that is
+not localized — a cover is used in every language — which is what an image
+sitemap needs: per page and language, the cover and the pictures in that
+language's text. `cms.media.getMany(ids)` loads several files at once.
+
 ## Adapters
 
 `local`, `memory`, `s3`, `r2` (credentials **or** a Workers binding), `gcs`
@@ -84,6 +173,30 @@ Two ship with the package, one per kind of runtime:
 
 `ImageProcessor` is one method, so a service of your own is an afternoon:
 `supports(contentType)` and `transform(bytes, transform, info)`.
+
+Rendering is never done for nothing. A file already in the `convert` format is
+stored as it was uploaded — a lossless WebP stays lossless — unless it also
+has to shrink. A size that would not change the picture (1920 wide, on a file
+1200 wide, with no crop) is answered with the original rather than a stored
+copy of the same pixels, which on a metered processor is also a
+transformation not paid for.
+
+## When the processor fails
+
+A processor that exists and fails — Cloudflare answers `9422` once a free
+account has used its 5,000 transformations for the month, a service is down,
+a file cannot be decoded — takes nothing down with it:
+
+- an upload stores the original as it arrived (metadata still stripped),
+- a size is answered with the original, cached for five minutes rather than a
+  year, and nothing is stored under the size's key, so it is rendered for real
+  once the processor recovers,
+- `media.processing.failed` is emitted, with the file, the size (`null` for
+  the original) and the error — at most once an hour per file and size, so a
+  spent quota is a report and not an outbox flood.
+
+A processor that cannot run at all (`image_processor_missing`: no binding, no
+`sharp`) is a deployment mistake and still fails the upload.
 
 Only declared sizes can be requested. Arbitrary dimensions in a URL are how a
 stranger fills a bucket one pixel at a time.

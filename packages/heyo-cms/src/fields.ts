@@ -5,3 +5,4 @@
  * uses, so there is no privileged path into the registry (stage 9).
  */
 export * from "./fields/index";
+export { isSlug, slugify, slugPattern, type SlugifyOptions } from "./slugify";

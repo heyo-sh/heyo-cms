@@ -49,29 +49,29 @@ export const cms = heyoCms({
 
 ## Sections
 
-| Key             | What it decides                                                         |
-| --------------- | ----------------------------------------------------------------------- |
-| `database`      | the adapter: `postgres()`, `mongodb()`, `sqlite()`, `d1()`              |
-| `basePath`      | where the handler is mounted. Default `/api/heyo-cms`                   |
-| `admin`         | the panel's path, title, bundle and **editor authentication**           |
-| `rbac`          | roles as `collection:action` patterns; declaring it changes the default |
-| `i18n`          | the language codes, and which one a missing translation falls back to   |
-| `uploads`       | storage adapter, limits, image processing, retention                    |
-| `ai`            | provider credentials, the default model, the panel-wide assistant       |
-| `webhooks`      | signing, delivery, retries, whether the panel manages them              |
-| `trash`         | whether a delete is soft, and for how long                              |
-| `collections`   | your content types                                                      |
-| `globals`       | singletons: one row, no `find`, no `create`, same hooks                 |
-| `databaseHooks` | `before`/`after` around every write                                     |
-| `hooks`         | HTTP-level `before`/`after`: rate limits, headers                       |
-| `plugins`       | collections, fields, routes, hooks and migrations from a package        |
-| `telemetry`     | `{ enabled: false }` turns the CLI's reporting off                      |
-| `migrations`    | where generated migrations are written. Default `./migrations`          |
+| Key             | What it decides                                                          |
+| --------------- | ------------------------------------------------------------------------ |
+| `database`      | the adapter: `postgres()`, `mongodb()`, `sqlite()`, `d1()`               |
+| `basePath`      | where the handler is mounted. Default `/api/heyo-cms`                    |
+| `admin`         | the panel's path, title, bundle and **editor authentication**            |
+| `rbac`          | roles as `collection:action` patterns; declaring it changes the default  |
+| `i18n`          | the language codes, and which one a missing translation falls back to    |
+| `uploads`       | storage adapter, limits, image processing, retention                     |
+| `ai`            | provider credentials, the default model, the panel-wide assistant        |
+| `webhooks`      | signing, delivery, retries, whether the panel manages them               |
+| `trash`         | whether a delete is soft, and for how long                               |
+| `collections`   | your content types                                                       |
+| `globals`       | singletons: one row, no `find`, no `create`, same hooks                  |
+| `databaseHooks` | `before`/`after` around every write                                      |
+| `hooks`         | HTTP-level `before`/`after`: rate limits, headers                        |
+| `plugins`       | collections, fields, routes, hooks, events and migrations from a package |
+| `telemetry`     | `{ enabled: false }` turns the CLI's reporting off                       |
+| `migrations`    | where generated migrations are written. Default `./migrations`           |
 
 ## What the instance gives back
 
 ```ts
-cms.handler; // (request: Request) => Promise<Response> — the whole HTTP surface
+cms.handler; // (request, { waitUntil }?) => Promise<Response> — the whole HTTP surface
 cms.api; // the local API, typed from `collections`
 cms.globals; // the singletons
 cms.auth; // sessions, invitations, API keys, roles

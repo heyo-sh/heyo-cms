@@ -10,6 +10,7 @@ import { emptySnapshot } from "../src/schema/snapshot";
 import { memory } from "../src/storage/local";
 import type { ImagesConfig, UploadsConfig } from "../src/types/config";
 import type { CmsEvent } from "../src/types/events";
+import type { JsonObject, JsonValue } from "../src/types/json";
 import type { ImageProcessor } from "../src/types/media";
 import type { CmsPlugin } from "../src/types/plugin";
 import { pngFixture, svgFixture } from "./images";
@@ -314,12 +315,12 @@ describe("the public route", () => {
 });
 
 describe("rich text with library images", () => {
-  const body = (id: string, alt = "") => ({
+  const body = (id: string, alt = ""): JsonObject => ({
     type: "doc",
     content: [
       { type: "paragraph", content: [{ type: "text", text: "Before." }] },
       { type: "image", attrs: { src: "blob:pasted", alt, mediaId: id } },
-    ],
+    ] as JsonValue[],
   });
 
   test("cms.media.renderRichText gives every image a size, a srcset and lazy loading", async () => {

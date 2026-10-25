@@ -183,6 +183,50 @@ export interface UnscheduleArgs extends ReadArgs {
  * A write returns `null` when a `before` hook returned `false` — the
  * documented way to stop an operation without an error.
  */
+export interface ResolveSlugArgs extends Omit<ReadArgs, "includeTrashed"> {
+  /** The slug field to look in. The collection's first `slug` field by default. */
+  field?: string;
+}
+
+/**
+ * Where a slug leads.
+ *
+ * `current: false` means the slug is a previous address of the document —
+ * the caller answers with a redirect to the document's slug now. `locale`
+ * is the language the slug matched in, which is not necessarily the one
+ * asked for: a link shared with the wrong language prefix still arrives.
+ */
+export interface SlugResolution<TDoc> {
+  id: string;
+  field: string;
+  /** Null for a field that is not localized. */
+  locale: string | null;
+  current: boolean;
+  /** Read in the requested locale, with the caller's access. */
+  document: TDoc;
+}
+
+/** One previous address of a document. */
+export interface PreviousSlug {
+  slug: string;
+  field: string;
+  /** Null for a field that is not localized. */
+  locale: string | null;
+  createdAt: string | null;
+}
+
+export interface PreviousSlugsArgs extends OperationArgs {
+  id: string;
+  /** The collection's first `slug` field with `history` by default. */
+  field?: string;
+}
+
+export interface PreviousSlugWriteArgs extends OperationArgs {
+  id: string;
+  slug: string;
+  field?: string;
+}
+
 export interface CollectionApi<TDoc> {
   find(args?: FindArgs): Promise<FindResult<TDoc>>;
   findOne(args?: FindOneArgs): Promise<TDoc | null>;
@@ -198,6 +242,25 @@ export interface CollectionApi<TDoc> {
   purge(args: DeleteArgs): Promise<TDoc | null>;
   schedule(args: ScheduleArgs<TDoc>): Promise<TDoc | null>;
   unschedule(args: UnscheduleArgs): Promise<TDoc | null>;
+  /**
+   * The document a slug belongs to, now or before: the lookup behind a page
+   * route and the 301 from an old URL. Null when nothing readable has it.
+   * Needs a `slug` field; previous addresses need `history: true`.
+   */
+  resolveSlug(
+    slug: string,
+    args?: ResolveSlugArgs,
+  ): Promise<SlugResolution<TDoc> | null>;
+  /** A document's previous addresses, newest first; `locale` narrows to one language. */
+  previousSlugs(args: PreviousSlugsArgs): Promise<PreviousSlug[]>;
+  /**
+   * Makes a slug lead here as a previous address: how two pages are merged
+   * — add the old page's slug, then trash the old page. Refused when the
+   * slug is another document's address or already leads elsewhere.
+   */
+  addPreviousSlug(args: PreviousSlugWriteArgs): Promise<PreviousSlug[]>;
+  /** Stops a previous address from leading here, which frees it for reuse. */
+  removePreviousSlug(args: PreviousSlugWriteArgs): Promise<PreviousSlug[]>;
 }
 
 /** `cms.api`: one entry per declared collection, typed from its fields. */

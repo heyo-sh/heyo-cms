@@ -15,9 +15,14 @@ import type {
   GlobalApi,
   GlobalScheduleArgs,
   OperationArgs,
+  PreviousSlug,
+  PreviousSlugsArgs,
+  PreviousSlugWriteArgs,
   ReadArgs,
+  ResolveSlugArgs,
   RestoreArgs,
   ScheduleArgs,
+  SlugResolution,
   UnscheduleArgs,
   UpdateArgs,
 } from "../types/api";
@@ -27,6 +32,7 @@ import type {
   ResolvedCollection,
 } from "../types/config";
 import type { DatabaseAdapter } from "../types/database";
+import type { FieldDefinition } from "../types/fields";
 import type { HookContext, HookOperation, ScopedDb } from "../types/hooks";
 import type { CmsInstance } from "../types/instance";
 import type { JsonObject } from "../types/json";
@@ -70,6 +76,19 @@ import {
 } from "./outbox";
 import { RelationLoader } from "./relations";
 import { scopedDb } from "./scoped-db";
+import {
+  assertFree,
+  prepareSlugs,
+  previousSlugRows,
+  recordSlugMoves,
+  releaseSlugs,
+  removePreviousSlugRow,
+  slugCandidates,
+  slugFields,
+  slugOptions,
+  type SlugMove,
+} from "./slugs";
+import { slugify } from "../slugify";
 import { listTrashed } from "./trash";
 
 const defaultLimit = 25;
@@ -145,6 +164,8 @@ interface WriteOutcome {
    * an unused picture (stage 5).
    */
   releaseMedia?: boolean;
+  /** Slugs this write retired, which become previous addresses. */
+  slugMoves?: SlugMove[];
   /**
    * Whether this operation's `after` hooks run.
    *
@@ -332,7 +353,186 @@ export class CmsEngine {
       purge: (args) => this.purge(collection, args),
       schedule: (args) => this.schedule(collection, args),
       unschedule: (args) => this.unschedule(collection, args),
+      resolveSlug: (slug, args) => this.resolveSlug(collection, slug, args),
+      previousSlugs: (args) => this.previousSlugs(collection, args),
+      addPreviousSlug: (args) =>
+        this.changePreviousSlug(collection, args, "add"),
+      removePreviousSlug: (args) =>
+        this.changePreviousSlug(collection, args, "remove"),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Slugs
+  // -------------------------------------------------------------------------
+
+  /**
+   * The slug field a slug operation is about: the one named, or the
+   * collection's first — with `history`, when the operation needs one.
+   */
+  private slugField(
+    collection: ResolvedCollection,
+    requested: string | undefined,
+    needsHistory: boolean,
+  ): string {
+    const fields = slugFields(collection).filter(
+      ([, field]) => !needsHistory || slugOptions(field).history === true,
+    );
+    const name =
+      requested === undefined
+        ? fields[0]?.[0]
+        : fields.find(([candidate]) => candidate === requested)?.[0];
+    if (name === undefined) {
+      throw CmsError.validation(
+        requested === undefined
+          ? `${collection.name} has no slug field${needsHistory ? " with history" : ""}`
+          : `${collection.name}.${requested} is not a slug field${needsHistory ? " with history" : ""}`,
+      );
+    }
+    return name;
+  }
+
+  private async resolveSlug(
+    collection: ResolvedCollection,
+    slug: string,
+    args: ResolveSlugArgs = {},
+  ): Promise<SlugResolution<JsonObject> | null> {
+    const field = this.slugField(collection, args.field, false);
+    const locale = localeContext(this.options.config, args);
+    const adapter = await this.options.database();
+    const candidates = await adapter.transaction((tx) =>
+      slugCandidates({
+        db: scopedDb(adapter, tx),
+        collection,
+        field,
+        slug,
+        locale: locale.locale,
+        locales: this.options.config.i18n.locales,
+      }),
+    );
+
+    const { field: _field, ...read } = args;
+    for (const candidate of candidates) {
+      // Read with the caller's access: a slug of a document this actor may
+      // not see resolves to nothing, exactly like a missing one.
+      const document = await this.findById(collection, candidate.id, read);
+      if (!document) continue;
+      return {
+        id: candidate.id,
+        field,
+        locale: candidate.locale,
+        current: candidate.current,
+        document,
+      };
+    }
+    return null;
+  }
+
+  private async previousSlugs(
+    collection: ResolvedCollection,
+    args: PreviousSlugsArgs,
+  ): Promise<PreviousSlug[]> {
+    const field = this.slugField(collection, args.field, true);
+    const document = await this.findById(collection, args.id, {
+      ...args,
+      includeTrashed: true,
+    });
+    if (!document) throw CmsError.notFound(`No ${collection.name} with id "${args.id}"`); // prettier-ignore
+    const definition = collection.fields[field];
+    const adapter = await this.options.database();
+    return adapter.transaction((tx) =>
+      previousSlugRows({
+        db: scopedDb(adapter, tx),
+        collection,
+        documentId: args.id,
+        field,
+        ...(args.locale === undefined
+          ? {}
+          : { locale: definition?.localized ? args.locale : null }),
+      }),
+    );
+  }
+
+  /**
+   * Adds or removes one previous address, under the rules of an update to
+   * the slug field: the actor must be allowed to update the document and to
+   * write that field.
+   */
+  private async changePreviousSlug(
+    collection: ResolvedCollection,
+    args: PreviousSlugWriteArgs,
+    change: "add" | "remove",
+  ): Promise<PreviousSlug[]> {
+    const field = this.slugField(collection, args.field, true);
+    const definition = collection.fields[field] as FieldDefinition;
+    const locale = localeContext(this.options.config, args);
+    const actor = args.actor ?? null;
+    const scopeLocale = definition.localized ? locale.locale : "";
+    const slug =
+      change === "add"
+        ? slugify(args.slug, {
+            ...(slugOptions(definition).maxLength === undefined
+              ? {}
+              : { maxLength: slugOptions(definition).maxLength as number }),
+          })
+        : args.slug;
+    if (slug === "") {
+      throw CmsError.validation(`"${args.slug}" has no letters or digits to make a slug from`); // prettier-ignore
+    }
+
+    const adapter = await this.options.database();
+    await adapter.transaction(async (tx) => {
+      const db = scopedDb(adapter, tx);
+      const row = await this.load(adapter, tx, collection, args.id, {
+        actor,
+        operation: "update",
+        locale,
+        includeTrashed: false,
+      });
+      const previous = rowToDocument(row, collection, locale);
+      await this.assertAllowed(collection, "update", actor, locale, previous);
+      assertFieldWriteAccess(collection, { [field]: null }, actor, locale.locale, previous); // prettier-ignore
+
+      const current = definition.localized
+        ? asObject(asObject(row.data)[field])[locale.locale]
+        : asObject(row.data)[field];
+      if (change === "add") {
+        if (current === slug) {
+          throw CmsError.conflict(`"${slug}" is this document's slug already, not a previous one.`); // prettier-ignore
+        }
+        await assertFree({
+          db,
+          collection,
+          documentId: String(row.id),
+          field,
+          locale: scopeLocale,
+          slug,
+        });
+        await recordSlugMoves(
+          db,
+          collection,
+          String(row.id),
+          [
+            {
+              field,
+              locale: scopeLocale,
+              from: slug,
+              to: String(current ?? ""),
+            },
+          ],
+          new Date(),
+        );
+      } else {
+        await removePreviousSlugRow(db, collection, String(row.id), field, scopeLocale, slug); // prettier-ignore
+      }
+    });
+
+    return this.previousSlugs(collection, {
+      id: args.id,
+      field,
+      ...(args.actor === undefined ? {} : { actor: args.actor }),
+      ...(definition.localized ? { locale: locale.locale } : {}),
+    });
   }
 
   private async find(
@@ -470,7 +670,18 @@ export class CmsEngine {
         );
         if (before === false) return null;
 
-        const { data, touched } = toStoredData(collection, before.data, locale);
+        const id = args.id ?? createId("doc");
+        // After the hooks, like validation: a hook that sets the title has
+        // to be able to rely on the slug being made from it.
+        const slugs = await prepareSlugs({
+          db,
+          collection,
+          input: before.data,
+          stored: null,
+          locale: locale.locale,
+          documentId: id,
+        });
+        const { data, touched } = toStoredData(collection, slugs.input, locale);
         // After the hooks, never before: the documented way to fill a
         // required field is a `before` hook, so validating first would make
         // the slug example in section 5 impossible.
@@ -486,7 +697,7 @@ export class CmsEngine {
           // An explicit id is how an import keeps the references other
           // documents hold (stage 10). A clash is the primary key's error to
           // raise, not something this checks first and then races against.
-          id: args.id ?? createId("doc"),
+          id,
           collection: collection.slug,
           data,
           created_at: now,
@@ -529,7 +740,7 @@ export class CmsEngine {
       runId: args.runId,
       idempotencyKey: args.idempotencyKey,
       ...(emit === undefined ? {} : { emit }),
-      step: async ({ adapter, tx, hooks, context }) => {
+      step: async ({ adapter, tx, db, hooks, context }) => {
         const row = await this.load(adapter, tx, collection, args.id, {
           actor,
           operation: "update",
@@ -557,9 +768,17 @@ export class CmsEngine {
         );
         if (before === false) return null;
 
+        const slugs = await prepareSlugs({
+          db,
+          collection,
+          input: before.data,
+          stored: asObject(row.data),
+          locale: locale.locale,
+          documentId: String(row.id),
+        });
         const { data, touched } = toStoredData(
           collection,
-          before.data,
+          slugs.input,
           locale,
           asObject(row.data),
         );
@@ -583,6 +802,7 @@ export class CmsEngine {
           previous,
           changed: changedFields(collection, previous, doc),
           stored: data,
+          slugMoves: slugs.moves,
         };
       },
     });
@@ -1260,6 +1480,7 @@ export class CmsEngine {
       // is the one moment the truth about what a document references changes:
       // a rolled back save must not leave a file looking unused (section 6).
       await this.syncMedia(db, request, result, events);
+      await this.syncSlugs(db, request, result);
       request.emit?.(events, result);
       // Flushed immediately after the write rather than at the end of the
       // transaction: when the engine has no real transactions (standalone
@@ -1498,6 +1719,33 @@ export class CmsEngine {
     for (const mediaId of result.reclaimed) {
       events.emit("media.reclaimed", payload(mediaId));
     }
+  }
+
+  /**
+   * Keeps `slug_history` in step with the write, in its transaction: a
+   * rolled back rename must not leave its old address behind as a redirect.
+   */
+  private async syncSlugs(
+    db: ScopedDb,
+    request: WriteRequest,
+    outcome: WriteOutcome,
+  ): Promise<void> {
+    if (!this.keepsSlugHistory(request.collection)) return;
+    const id = String(outcome.doc.id);
+    if (outcome.releaseMedia === true) {
+      // A purge: the document is gone, and so is every address it had.
+      await releaseSlugs(db, request.collection, id);
+      return;
+    }
+    if (outcome.slugMoves && outcome.slugMoves.length > 0) {
+      await recordSlugMoves(db, request.collection, id, outcome.slugMoves, new Date()); // prettier-ignore
+    }
+  }
+
+  private keepsSlugHistory(collection: ResolvedCollection): boolean {
+    return slugFields(collection).some(
+      ([, field]) => slugOptions(field).history === true,
+    );
   }
 
   private referencesMedia(collection: ResolvedCollection): boolean {

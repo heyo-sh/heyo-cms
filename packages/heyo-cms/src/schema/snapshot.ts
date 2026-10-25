@@ -8,7 +8,7 @@ import type {
   SchemaSnapshot,
   TableSnapshot,
 } from "../types/schema";
-import { systemTables } from "./system";
+import { slugHistoryTableSnapshot, systemTables } from "./system";
 
 /** The table every user-declared collection and global is stored in. */
 export const documentsTableName = "documents";
@@ -47,6 +47,7 @@ export function buildSchemaSnapshot(input: SnapshotInput): SchemaSnapshot {
       : table,
   );
 
+  if (keepsSlugHistory(collections)) tables.push(slugHistoryTableSnapshot());
   for (const table of input.pluginTables ?? []) tables.push(normalise(table));
 
   return {
@@ -54,6 +55,18 @@ export function buildSchemaSnapshot(input: SnapshotInput): SchemaSnapshot {
     tables: tables.sort((a, b) => a.name.localeCompare(b.name)),
     collections: collections.map(collectionSnapshot),
   };
+}
+
+/** Whether any collection keeps previous slugs, and so needs `slug_history`. */
+export function keepsSlugHistory(
+  collections: Iterable<ResolvedCollection>,
+): boolean {
+  for (const collection of collections) {
+    for (const field of Object.values(collection.fields)) {
+      if (field.type === "slug" && field.options.history === true) return true;
+    }
+  }
+  return false;
 }
 
 export function emptySnapshot(): SchemaSnapshot {

@@ -13,6 +13,7 @@ import { useState } from "react";
 import { fieldComponent } from "../lib/extensions";
 import { MediaField } from "./media-field";
 import { RelationField } from "./relation-field";
+import { SlugField } from "./slug-field";
 import { RichTextEditor } from "./rich-text/editor";
 
 /**
@@ -43,6 +44,12 @@ export interface FieldInputProps {
   document: Record<string, unknown>;
   disabled?: boolean;
   id?: string;
+  /** The API path of the collection (`posts`, `globals/settings`). */
+  collection?: string;
+  /** Absent while the document is being created. */
+  documentId?: string;
+  /** The language being edited. */
+  locale?: string;
 }
 
 export function FieldInput(props: FieldInputProps) {
@@ -130,6 +137,9 @@ export function FieldInput(props: FieldInputProps) {
 
     case "media":
       return <MediaField {...props} />;
+
+    case "slug":
+      return <SlugField {...props} />;
 
     case "relation":
       return <RelationField {...props} />;
