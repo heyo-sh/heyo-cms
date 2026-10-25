@@ -9,6 +9,6 @@
     "@heyo-sh/heyo-cms": "workspace:*",
     "@heyo-sh/heyo-cms-admin": "workspace:*",
     "pg": "^8.16.3",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   }
 }
