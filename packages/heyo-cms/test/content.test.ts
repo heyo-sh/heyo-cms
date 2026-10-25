@@ -109,6 +109,15 @@ test("locale splitting preserves nulls and cannot traverse prototypes", async ()
   await cms.close();
 });
 
+test("a localized field holding one value instead of one per language is refused", async () => {
+  const { cms } = await setup();
+  const definition = cms._config.collections.posts!;
+  expect(() => splitLocales(definition, { title: "Hello" }, "en")).toThrow(
+    /title is localized/,
+  );
+  await cms.close();
+});
+
 describe("content export", () => {
   test("keeps every locale, not the one a read would have picked", async () => {
     const { cms } = await setup();

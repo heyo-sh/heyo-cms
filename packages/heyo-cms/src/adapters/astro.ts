@@ -67,12 +67,7 @@ export function cmsHandler(
   };
 }
 
-/**
- * `Astro.locals.cfContext.waitUntil` (Astro 6 and later), or the older
- * `locals.runtime.ctx.waitUntil`, bound to its context.
- */
+/** `Astro.locals.cfContext.waitUntil` on Cloudflare, bound to its context. */
 function cloudflareWaitUntil(locals: unknown): WaitUntil | undefined {
-  const value = locals as
-    { cfContext?: unknown; runtime?: { ctx?: unknown } } | undefined;
-  return boundWaitUntil(value?.cfContext ?? value?.runtime?.ctx);
+  return boundWaitUntil((locals as { cfContext?: unknown } | undefined)?.cfContext); // prettier-ignore
 }

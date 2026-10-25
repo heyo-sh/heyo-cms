@@ -30,7 +30,7 @@ export interface FieldAiAction {
 /**
  * `true` turns on a built-in action with its default prompt; an object
  * customises it. Unknown keys are custom actions registered with
- * `defineAiAction()`.
+ * `defineAiAction()`. Generation is not a key here: it is `aiGenerate`.
  */
 export type FieldAiConfig = Record<string, FieldAiAction | true>;
 
@@ -80,7 +80,7 @@ export interface FieldOptions {
   generate?: FieldGenerator;
   /** Generate an AI suggestion for this particular field; context names sibling fields. */
   aiGenerate?: FieldAiAction;
-  /** @deprecated Use aiGenerate for field generation. Other legacy actions remain supported. */
+  /** The field's other AI actions: `translate`, `improve`, `alt`, `tags`, or a custom one. */
   ai?: FieldAiConfig;
   access?: FieldAccess;
   admin?: FieldAdminOptions;

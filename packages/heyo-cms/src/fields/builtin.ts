@@ -70,7 +70,7 @@ export const text = defineField<string, TextOptions>({
     type: "text",
     ...(options.default === undefined ? {} : { default: options.default }),
   }),
-  aiActions: ["generate", "improve", "summarize", "translate"],
+  aiActions: ["improve", "summarize", "translate"],
 });
 
 export interface TextareaOptions extends TextOptions {
@@ -89,7 +89,7 @@ export const textarea = defineField<string, TextareaOptions>({
       ? z.string()
       : z.string().max(options.maxLength),
   column: () => ({ type: "text" }),
-  aiActions: ["generate", "improve", "summarize", "translate"],
+  aiActions: ["improve", "summarize", "translate"],
 });
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ export const richText = defineField<RichTextValue, RichTextOptions>({
   schema: () =>
     z.looseObject({ type: z.string() }) as unknown as z.ZodType<RichTextValue>,
   column: () => ({ type: "json" }),
-  aiActions: ["generate", "improve", "summarize", "translate"],
+  aiActions: ["improve", "summarize", "translate"],
 });
 
 // ---------------------------------------------------------------------------

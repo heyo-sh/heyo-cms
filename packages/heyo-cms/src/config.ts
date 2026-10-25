@@ -442,7 +442,6 @@ function resolveConfig(
   assertUniqueSlugs({ ...collections, ...globals });
   validateSlugFields({ ...collections, ...globals });
   validateRelations({ ...collections, ...globals });
-  assertNoLegacyChat(config);
   validateHookTargets(config, collections, globals);
   validateFieldAi({ ...collections, ...globals });
   validateI18n(config);
@@ -599,44 +598,6 @@ function validateRelations(
         );
       }
     }
-  }
-}
-
-/**
- * The document chat is gone, and silence is the wrong way to say so.
- *
- * `collection.ai.chat` and `ai.chat` configured a per-collection whitelist for
- * a chat that only ever proposed changes. The panel-wide assistant replaces it
- * and derives its reach from the live configuration and the signed-in actor
- * instead, so the old keys have no meaning — but a deployment that still has
- * them has an opinion about what AI may read, and ignoring that opinion while
- * shipping an agent that writes would be the worst possible upgrade.
- *
- * Checked against the untyped object rather than the type, because the
- * configuration is routinely written in JavaScript or assembled at runtime and
- * the type system is not there to catch it.
- */
-function assertNoLegacyChat(
-  config: HeyoCmsConfig<CollectionsConfig, GlobalsConfig>,
-): void {
-  const ai = config.ai as { chat?: unknown } | undefined;
-  if (ai && ai.chat !== undefined) {
-    throw new CmsConfigError(
-      "ai.chat",
-      "document chat was replaced by the panel-wide assistant. Use ai.assistant, which takes a model, instructions and limits; what the agent may read and write now comes from the configuration and the actor at runtime",
-    );
-  }
-
-  const everything = {
-    ...(config.collections as Record<string, { ai?: unknown }>),
-    ...((config.globals ?? {}) as Record<string, { ai?: unknown }>),
-  };
-  for (const [name, definition] of Object.entries(everything)) {
-    if (definition?.ai === undefined) continue;
-    throw new CmsConfigError(
-      `collections.${name}.ai`,
-      "per-collection ai.chat was removed with document chat. Delete the key; the assistant reads the collection through the same access control as everything else",
-    );
   }
 }
 
