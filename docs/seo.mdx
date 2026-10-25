@@ -32,9 +32,9 @@ if (now !== slug)
   return Response.redirect(`${origin}/${locale}/blog/${now}`, 301);
 ```
 
-Merging two posts is `addPreviousSlug()` on the one that stays, then a trash
-of the other: every link to the old post now lands on the new one, and
-neither a new post nor an editor can take the address by accident.
+Merging two posts is a purge of the old one, then `addPreviousSlug()` with its
+slug on the one that stays: every link to the old post now lands on the new
+one, and neither a new post nor an editor can take the address by accident.
 
 ## Files at addresses made for the web
 

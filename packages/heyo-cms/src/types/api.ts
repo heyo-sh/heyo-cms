@@ -255,8 +255,9 @@ export interface CollectionApi<TDoc> {
   previousSlugs(args: PreviousSlugsArgs): Promise<PreviousSlug[]>;
   /**
    * Makes a slug lead here as a previous address: how two pages are merged
-   * — add the old page's slug, then trash the old page. Refused when the
-   * slug is another document's address or already leads elsewhere.
+   * — purge the old page, then add its slug here. Refused while the slug is
+   * another document's address (a trashed one included) or already leads
+   * elsewhere.
    */
   addPreviousSlug(args: PreviousSlugWriteArgs): Promise<PreviousSlug[]>;
   /** Stops a previous address from leading here, which frees it for reuse. */

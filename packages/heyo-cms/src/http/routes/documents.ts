@@ -538,7 +538,7 @@ function slugRoutes(
       openapi: {
         summary: `Make a slug lead to this ${collection.label}`,
         description:
-          "How two pages are merged: add the old page's slug here, then trash the old page. 409 when the slug is another document's address or already leads elsewhere.",
+          "How two pages are merged: purge the old page, then add its slug here. 409 while the slug is another document's address (a trashed one included) or already leads elsewhere.",
         tags,
         parameters: [pathParam("id", "Document id."), ...localeParams],
         requestBody: jsonBody({

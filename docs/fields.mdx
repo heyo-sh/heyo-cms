@@ -126,10 +126,12 @@ another language, then a previous slug — in the requested language first.
 The document is read with the caller's access, in the requested locale, so a
 draft a visitor may not read resolves to nothing.
 
-Merging two pages is adding the old page's slug to the one that stays, then
-trashing the old page:
+Merging two pages is deleting the old page for good, then adding its slug to
+the one that stays — while the old page exists, even in the trash, its slug is
+still its own:
 
 ```ts
+await cms.api.posts.purge({ id: old.id });
 await cms.api.posts.addPreviousSlug({ id: kept.id, slug: "old-post", locale: "en" }); // prettier-ignore
 await cms.api.posts.previousSlugs({ id: kept.id }); // newest first
 await cms.api.posts.removePreviousSlug({ id: kept.id, slug: "old-post", locale: "en" }); // prettier-ignore
