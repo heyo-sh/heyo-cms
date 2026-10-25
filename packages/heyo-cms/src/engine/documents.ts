@@ -187,9 +187,7 @@ export function validateFields(
       continue;
     }
     const result = field.schema.safeParse(value);
-    if (!result.success) {
-      errors[name] = result.error.issues[0]?.message ?? "is invalid";
-    }
+    if (!result.success) errors[name] = issueMessage(result.error.issues[0]);
   }
 
   if (Object.keys(errors).length > 0) {
@@ -200,6 +198,28 @@ export function validateFields(
       { fields: errors },
     );
   }
+}
+
+/**
+ * One validation problem, said where it is: a list's row is counted from one,
+ * the way an editor counts them (`#2 answer: Invalid input: …`). A scalar
+ * field has no path, and keeps the bare message.
+ */
+function issueMessage(
+  issue:
+    { code: string; message: string; path: readonly PropertyKey[] } | undefined,
+): string {
+  if (!issue) return "is invalid";
+  const where = issue.path
+    .map((part) => (typeof part === "number" ? `#${part + 1}` : String(part)))
+    .join(" ");
+  if (!where) return issue.message;
+  // A required field of a row left empty: said the way a document's own
+  // required field is, not as a type error about `null`.
+  const missing =
+    issue.code === "invalid_type" &&
+    /received (null|undefined)$/.test(issue.message);
+  return `${where}: ${missing ? "is required" : issue.message}`;
 }
 
 /** Field names whose resolved value differs between two documents. */

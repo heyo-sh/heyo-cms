@@ -7,7 +7,7 @@ import { mongodb } from "../src/db/mongodb";
 import { postgres, type PostgresClient } from "../src/db/postgres";
 import { sqlite } from "../src/db/sqlite";
 import { CmsError } from "../src/errors";
-import { multiselect, number, relation, select, text } from "../src/fields";
+import { list, multiselect, number, relation, select, text, url } from "../src/fields"; // prettier-ignore
 import { and, eq, gte, orderBy } from "../src/query";
 import { emptySnapshot } from "../src/schema/snapshot";
 import type { Actor } from "../src/types/actor";
@@ -50,6 +50,10 @@ const collections = () => ({
   posts: defineCollection({
     fields: {
       title: text({ required: true, localized: true }),
+      sources: list({
+        localized: true,
+        fields: { title: text({ required: true }), url: url() },
+      }),
       handle: text({ unique: true, index: true, pattern: "^[a-z0-9-]+$" }),
       status: select({ options: ["draft", "published"], default: "draft" }),
       views: number({ integer: true }),
@@ -381,6 +385,50 @@ function runEngineSuite(entry: EngineUnderTest): void {
     // -----------------------------------------------------------------------
     // i18n
     // -----------------------------------------------------------------------
+
+    test("a list keeps its rows, in order, per language", async () => {
+      const { cms } = await setup({
+        i18n: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const english = [
+        { title: "Second source", url: "https://b.example" },
+        { title: "First source" },
+      ];
+      const post = await cms.api.posts.create({
+        data: { title: "Cited", handle: "cited", sources: english },
+        locale: "en",
+      });
+      expect(post?.sources).toEqual(english);
+
+      const german = [{ title: "Quelle", url: null }];
+      await cms.api.posts.update({
+        id: String(post?.id),
+        data: { sources: german },
+        locale: "de",
+      });
+      const de = await cms.api.posts.findById(String(post?.id), { locale: "de" }); // prettier-ignore
+      expect(de?.sources).toEqual(german);
+      const en = await cms.api.posts.findById(String(post?.id), { locale: "en" }); // prettier-ignore
+      expect(en?.sources).toEqual(english);
+
+      // A bad row is refused, and the message says which one and why.
+      const refused = await cms.api.posts
+        .update({
+          id: String(post?.id),
+          data: {
+            sources: [{ title: "Fine" }, { url: "https://c.example" }] as never,
+          },
+          locale: "en",
+        })
+        .catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(CmsError);
+      expect((refused as CmsError).message).toContain(
+        "sources #2 title: is required",
+      );
+      const unchanged = await cms.api.posts.findById(String(post?.id), { locale: "en" }); // prettier-ignore
+      expect(unchanged?.sources).toEqual(english);
+      await cms.close();
+    });
 
     test("resolves one locale per read and marks a fallback", async () => {
       const { cms } = await setup({

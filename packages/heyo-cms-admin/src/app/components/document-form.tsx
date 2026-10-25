@@ -158,7 +158,7 @@ export function FieldRow({
   error,
   disabled,
   stacked,
-  horizontal,
+  horizontal: paired,
 }: {
   field: PanelField;
   collection: PanelCollection;
@@ -171,6 +171,10 @@ export function FieldRow({
   stacked?: boolean;
   horizontal?: boolean;
 }) {
+  // A list's rows are forms of their own: beside a 6rem label column they
+  // would be squeezed into what is left of the pane, so a list always takes
+  // the full width, under its label.
+  const horizontal = paired === true && field.type !== "list";
   const { locale } = usePanel();
   const id = useId();
   const readOnly = disabled || !field.access.update;

@@ -9,12 +9,14 @@ import { CmsConfigError } from "../src/errors";
 import {
   boolean,
   date,
+  list,
   media,
   number,
   relation,
   richText,
   select,
   text,
+  textarea,
 } from "../src/fields";
 import { describePanel } from "../src/panel";
 import { emptySnapshot } from "../src/schema/snapshot";
@@ -57,6 +59,15 @@ const collections = () => ({
       author: relation("cms_users"),
       publishedAt: date({ mode: "date" }),
       featured: boolean({}),
+      faq: list({
+        localized: true,
+        maxItems: 10,
+        fields: {
+          question: text({ required: true, maxLength: 120 }),
+          answer: textarea({ rows: 3, description: "Markdown" }),
+          kind: select({ options: ["general", "billing"], default: "general" }),
+        },
+      }),
     },
     access: {
       read: () => true,
@@ -157,6 +168,27 @@ describe("describePanel", () => {
     expect(views?.options).toMatchObject({ integer: true, min: 0 });
     expect(cover?.options.accept).toBe("image/*");
     expect(author?.options.relationTo).toBe("cms_users");
+  });
+
+  test("describes a list's row as fields of its own", () => {
+    const faq = postsOf(describeFor(editor)).fields.find(
+      (field) => field.name === "faq",
+    );
+    expect(faq?.type).toBe("list");
+    expect(faq?.localized).toBe(true);
+    expect(faq?.options).toEqual({ maxItems: 10 });
+    expect(faq?.fields?.map((field) => [field.name, field.type, field.required])).toEqual([
+      ["question", "text", true],
+      ["answer", "textarea", false],
+      ["kind", "select", false],
+    ]); // prettier-ignore
+    const [question, answer, kind] = faq?.fields ?? [];
+    expect(question?.options.maxLength).toBe(120);
+    expect(answer?.description).toBe("Markdown");
+    expect(kind?.options.options).toEqual(["general", "billing"]);
+    expect(kind?.defaultValue).toBe("general");
+    // The row's definitions hold zod schemas: none of that crosses HTTP.
+    expect(JSON.stringify(faq)).not.toContain("_zod");
   });
 
   test("drops everything that is not data", () => {

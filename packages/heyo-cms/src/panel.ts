@@ -276,6 +276,11 @@ function describeField(
 ): PanelField {
   const options = field.options;
   const admin = field.admin ?? {};
+  // A list's row is described as fields of its own. Its definitions hold zod
+  // schemas, which are not data and are not sent as options.
+  const row =
+    field.type === "list" && isFieldMap(options.fields) ? options.fields : null;
+  const { fields: _row, ...rest } = options;
 
   return {
     name,
@@ -292,7 +297,7 @@ function describeField(
     ...(field.defaultValue === undefined
       ? {}
       : { defaultValue: field.defaultValue }),
-    options: serialisableOptions(options),
+    options: serialisableOptions(row ? rest : options),
     admin: {
       ...(typeof admin.placeholder === "string"
         ? { placeholder: admin.placeholder }
@@ -307,7 +312,18 @@ function describeField(
           ? false
           : mayTouchField(field.access?.update, actor),
     },
+    ...(row
+      ? {
+          fields: Object.entries(row).map(([key, item]) =>
+            describeField(key, item, actor),
+          ),
+        }
+      : {}),
   };
+}
+
+function isFieldMap(value: unknown): value is Record<string, FieldDefinition> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function describeFieldAi(field: FieldDefinition): PanelFieldAiAction[] {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { CmsConfigError } from "../errors";
 import type { FieldDefinition, FieldOptions } from "../types/fields";
 import type { JsonObject, JsonValue } from "../types/json";
 import { slugify, slugPattern } from "../slugify";
@@ -486,6 +487,176 @@ export const url = defineField<string, TextOptions>({
   schema: () => z.string().url(),
   column: () => ({ type: "text" }),
 });
+
+// ---------------------------------------------------------------------------
+// list
+// ---------------------------------------------------------------------------
+
+/**
+ * What a row of a list may hold: values that are complete on their own. A
+ * relation or a media file needs a loader and usage accounting, rich text an
+ * editor and a renderer, a slug a uniqueness check across documents — none
+ * of which reaches inside a row.
+ */
+const listRowTypes = new Set([
+  "text",
+  "textarea",
+  "email",
+  "url",
+  "number",
+  "boolean",
+  "date",
+  "select",
+  "multiselect",
+]);
+
+/** What a field inside a row cannot be: these belong to the list, or to a document. */
+const listRowRefused = [
+  "localized",
+  "unique",
+  "index",
+  "access",
+  "generate",
+  "aiGenerate",
+  "ai",
+] as const;
+
+export interface ListOptions extends FieldOptions {
+  /**
+   * The fields of one row:
+   * `{ question: text({ required: true }), answer: textarea() }`.
+   */
+  fields: Record<string, FieldDefinition>;
+  minItems?: number;
+  maxItems?: number;
+  default?: JsonObject[];
+}
+
+type RowValue<TField> = TField extends FieldDefinition<infer TValue> ? TValue : never; // prettier-ignore
+
+/** One row of a list: a required field is always there, an optional one may be missing or `null`. */
+export type ListRow<TFields extends Record<string, FieldDefinition>> = {
+  [
+    K in keyof TFields as null extends RowValue<TFields[K]> ? never : K
+  ]: RowValue<TFields[K]>; // prettier-ignore
+} & {
+  [
+    K in keyof TFields as null extends RowValue<TFields[K]> ? K : never
+  ]?: RowValue<TFields[K]>; // prettier-ignore
+};
+
+const isFieldDefinition = (value: unknown): value is FieldDefinition =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as FieldDefinition).type === "string" &&
+  typeof (value as FieldDefinition).schema?.safeParse === "function";
+
+const listBuilder = defineField<JsonObject[], ListOptions>({
+  name: "list",
+  optionsSchema: commonOptions.extend({
+    fields: z.record(
+      z.string(),
+      z.custom<FieldDefinition>(
+        isFieldDefinition,
+        "must be a field, such as text()",
+      ),
+    ),
+    minItems: z.number().int().nonnegative().optional(),
+    maxItems: z.number().int().positive().optional(),
+    default: z.array(z.record(z.string(), jsonValue)).optional(),
+  }) as unknown as z.ZodType<ListOptions>,
+  schema: (options) => {
+    const row: Record<string, z.ZodType> = {};
+    for (const [name, field] of Object.entries(options.fields)) {
+      // A field's own schema already says whether it may be `null`; an
+      // optional one may also be left out of the row altogether.
+      row[name] = field.required ? field.schema : field.schema.optional();
+    }
+    // Strict: a misspelt key is an error, not a value silently dropped.
+    let rows = z.array(z.strictObject(row));
+    if (options.minItems !== undefined) rows = rows.min(options.minItems);
+    if (options.maxItems !== undefined) rows = rows.max(options.maxItems);
+    return rows as unknown as z.ZodType<JsonObject[]>;
+  },
+  column: () => ({ type: "json", array: true }),
+});
+
+/**
+ * An ordered list of rows, each with the same small set of fields: questions
+ * and answers, sources, a change log.
+ *
+ * ```ts
+ * faq: list({
+ *   localized: true,
+ *   fields: {
+ *     question: text({ required: true }),
+ *     answer: textarea({ required: true }),
+ *   },
+ * }),
+ * ```
+ *
+ * The value is an array of objects, stored as JSON in the document and
+ * validated row by row with the fields' own schemas. The list is the field:
+ * it is localized as a whole, and it carries `required`, `access` and the
+ * rest. A row holds text, textarea, email, url, number, boolean, date, select
+ * and multiselect fields.
+ */
+export function list<const TOptions extends ListOptions>(
+  options: TOptions,
+): FieldDefinition<FieldValue<ListRow<TOptions["fields"]>[], TOptions>> {
+  const fields = (options as ListOptions | undefined)?.fields;
+  if (
+    !fields ||
+    typeof fields !== "object" ||
+    Object.keys(fields).length === 0
+  ) {
+    throw new CmsConfigError("fields.list.fields", "a list needs at least one field in a row"); // prettier-ignore
+  }
+  for (const [name, field] of Object.entries(fields)) {
+    const path = `fields.list.fields.${name}`;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new CmsConfigError(path, "a row's field name must be an identifier (letters, digits, _)"); // prettier-ignore
+    }
+    if (!isFieldDefinition(field)) {
+      throw new CmsConfigError(path, "must be a field, such as text()");
+    }
+    if (!listRowTypes.has(field.type)) {
+      throw new CmsConfigError(
+        path,
+        `a list row cannot hold a ${field.type} field; use ${[...listRowTypes].join(", ")}`,
+      );
+    }
+    for (const option of listRowRefused) {
+      if (field.options[option] !== undefined) {
+        throw new CmsConfigError(
+          `${path}.${option}`,
+          option === "localized"
+            ? "a list is localized as a whole: set localized on the list"
+            : `not supported inside a list row`,
+        );
+      }
+    }
+  }
+  if (options.unique === true || options.index === true) {
+    throw new CmsConfigError(
+      "fields.list",
+      "a list cannot be unique or indexed",
+    );
+  }
+  if (
+    options.minItems !== undefined &&
+    options.maxItems !== undefined &&
+    options.minItems > options.maxItems
+  ) {
+    throw new CmsConfigError(
+      "fields.list.minItems",
+      "cannot be more than maxItems",
+    );
+  }
+  return listBuilder(options) as unknown as FieldDefinition<
+    FieldValue<ListRow<TOptions["fields"]>[], TOptions>
+  >;
+}
 
 // ---------------------------------------------------------------------------
 // Presets

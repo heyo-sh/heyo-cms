@@ -124,6 +124,10 @@ export function cellText(field: PanelField, value: unknown): string {
       return Array.isArray(value) ? value.join(", ") : String(value);
     case "json":
       return JSON.stringify(value).slice(0, 80);
+    case "list":
+      return Array.isArray(value)
+        ? `${value.length} ${value.length === 1 ? "row" : "rows"}`
+        : "—";
     default:
       if (typeof value === "object") return JSON.stringify(value).slice(0, 80);
       return String(value);

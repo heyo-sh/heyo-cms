@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { cmsUsers } from "../src/auth/config";
 import { defineCollection, defineGlobal, heyoCms } from "../src/config";
 import { sqlite } from "../src/db/sqlite";
-import { number, media, select, text } from "../src/fields";
+import { list, number, media, select, text, url } from "../src/fields";
 import { emptySnapshot } from "../src/schema/snapshot";
 import { memory } from "../src/storage/local";
 import { cmsHandler as astroHandler } from "../src/adapters/astro";
@@ -52,6 +52,9 @@ async function build(options: { plugins?: CmsPlugin<unknown>[] } = {}) {
           status: select({ options: ["draft", "published"], default: "draft" }),
           views: number({ integer: true }),
           cover: media({}),
+          sources: list({
+            fields: { title: text({ required: true }), url: url() },
+          }),
         },
       }),
     },
@@ -158,6 +161,18 @@ describe("openapi", () => {
     // client can tell it apart from a string that happens to be a string.
     expect(properties.cover).toMatchObject({ "x-heyo-cms-field": "media" });
 
+    // A list is an array of rows whose keys are the row's fields.
+    expect(properties.sources).toMatchObject({
+      type: ["array", "null"],
+      items: {
+        type: "object",
+        required: ["title"],
+        additionalProperties: false,
+        properties: { title: { type: "string" } },
+      },
+      "x-heyo-cms-field": "list",
+    });
+
     // System fields are part of what a read answers, so they are documented.
     expect(properties.id).toBeDefined();
     expect(properties.deletedAt).toBeDefined();
@@ -173,6 +188,7 @@ describe("openapi", () => {
       "status",
       "views",
       "cover",
+      "sources",
     ]);
     await cms.close();
   });

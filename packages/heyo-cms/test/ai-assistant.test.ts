@@ -5,7 +5,8 @@ import { expandRoles, permits } from "../src/access/permissions";
 import { defineCollection, defineGlobal, heyoCms, systemActor } from "../src/config"; // prettier-ignore
 import { sqlite } from "../src/db/sqlite";
 import { richTextToMarkdown } from "../src/editor/index";
-import { media, richText, select, text } from "../src/fields";
+import { list, media, richText, select, text } from "../src/fields";
+import { describeCmsFor } from "../src/ai/assistant/schema";
 import { memory } from "../src/storage/local";
 import { emptySnapshot } from "../src/schema/snapshot";
 import type { Actor } from "../src/types/actor";
@@ -1554,5 +1555,36 @@ describe("over HTTP", () => {
     expect(offPaths.some((path) => path.endsWith("/ai/assistant"))).toBe(false);
     expect(off.inspect().ai.assistant).toBe(false);
     await off.close();
+  });
+});
+
+describe("what the assistant is told about a list", () => {
+  test("the fields of a row, so it can write one without guessing", () => {
+    const cms = heyoCms({
+      database: () => sqlite(new Database(":memory:")),
+      collections: {
+        posts: defineCollection({
+          fields: {
+            title: text({ required: true }),
+            faq: list({
+              fields: {
+                question: text({ required: true }),
+                kind: select({ options: ["general", "billing"] }),
+              },
+            }),
+          },
+        }),
+      },
+    });
+    const posts = describeCmsFor(cms._config, systemActor("test"), ["en"]).collections.find(
+      (collection) => collection.slug === "posts",
+    ); // prettier-ignore
+    const faq = posts?.fields.find((field) => field.name === "faq");
+    expect(faq?.type).toBe("list");
+    expect(faq?.rowFields).toEqual([
+      { name: "question", type: "text", required: true },
+      { name: "kind", type: "select", required: false, options: ["general", "billing"] },
+    ]); // prettier-ignore
+    expect(posts?.fields.find((field) => field.name === "title")?.rowFields).toBeUndefined(); // prettier-ignore
   });
 });
