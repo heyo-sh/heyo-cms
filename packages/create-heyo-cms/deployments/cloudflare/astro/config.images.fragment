@@ -1,18 +1,25 @@
 /**
- * No processor, because this runtime has no codec.
+ * What resizes an uploaded image, and into what.
  *
- * Workers cannot run `sharp`, and that is not a gap in the configuration: a
- * named size with `variants.mode: "on-demand"` puts the size in the URL, and
- * Cloudflare Images (or any CDN in front of the bucket) renders it. The CMS
- * stores one original and serves it when nothing else answers.
+ * Workers cannot load `sharp`, but they do not need it: the Images binding
+ * resizes and converts inside the runtime, so `convert: { to: "webp" }` and
+ * the named sizes are rendered here — on the Worker — the same way
+ * `sharpImages()` renders them on Node. The binding is declared in
+ * `wrangler.json` (`"images": { "binding": "IMAGES" }`). `wrangler dev`
+ * simulates it locally and does not apply a crop or a focal point; add
+ * `"remote": true` to the binding to see those in development.
  *
- * `stripMetadata` still applies — the engine removes EXIF itself, with or
- * without a codec, so a phone photograph does not publish the coordinates of
- * where it was taken.
+ * Sizes are named rather than free: arbitrary dimensions in a URL are how a
+ * stranger fills a bucket and burns CPU one pixel at a time.
  */
 const images: ImagesConfig = {
+  processor: cloudflareImages(imagesBinding),
+  convert: { to: "webp", keep: ["image/gif", "image/svg+xml"] },
+  quality: 82,
   stripMetadata: true,
+  maxDimensions: { width: 3840, height: 3840 },
   focalPoint: true,
+  crop: true,
   variants: {
     mode: "on-demand",
     sizes: {
@@ -22,3 +29,25 @@ const images: ImagesConfig = {
     },
   },
 };
+
+/**
+ * The binding, from whichever half of the runtime has it — the same two
+ * sources the bucket and the database read. In a deployed Worker
+ * `cloudflare:workers` resolves and carries it; a dev server running outside
+ * workerd hands it over through the global the mount sets.
+ */
+async function imagesBinding(): Promise<CloudflareImagesBinding | undefined> {
+  const injected =
+    (globalThis as { __heyoCloudflareEnv?: Record<string, unknown> }) // prettier-ignore
+    .__heyoCloudflareEnv;
+  if (injected?.IMAGES) return injected.IMAGES as CloudflareImagesBinding;
+
+  try {
+    const module = (await import(/* @vite-ignore */ "cloudflare:workers")) as {
+      env?: Record<string, unknown>;
+    };
+    return module.env?.IMAGES as CloudflareImagesBinding | undefined;
+  } catch {
+    return undefined;
+  }
+}

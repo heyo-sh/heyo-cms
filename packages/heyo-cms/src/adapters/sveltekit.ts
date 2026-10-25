@@ -1,4 +1,4 @@
-import type { CmsHandler } from "../types/instance";
+import { boundWaitUntil, handle as respond, type HandlerLike, type WaitUntil } from "./deliver"; // prettier-ignore
 
 /**
  * SvelteKit.
@@ -19,12 +19,17 @@ import type { CmsHandler } from "../types/instance";
  * `fallback` is SvelteKit's catch-all for the methods a `+server.ts` does not
  * name, which is how `HEAD` and `OPTIONS` reach the router.
  */
-export interface HandlerLike {
-  handler: CmsHandler;
-}
+export type { HandlerLike } from "./deliver";
 
 export interface RequestEventLike {
   request: Request;
+  /** `adapter-cloudflare` puts the execution context at `platform.ctx`. */
+  platform?: unknown;
+}
+
+export interface SvelteKitHandlerOptions {
+  /** For a platform whose `waitUntil` is not on `event.platform`. */
+  waitUntil?: WaitUntil;
 }
 
 export type SvelteKitRoute = (event: RequestEventLike) => Promise<Response>;
@@ -38,8 +43,17 @@ export interface SvelteKitRouteHandlers {
   fallback: SvelteKitRoute;
 }
 
-export function cmsHandler(cms: HandlerLike): SvelteKitRouteHandlers {
-  const handle: SvelteKitRoute = ({ request }) => cms.handler(request);
+export function cmsHandler(
+  cms: HandlerLike,
+  options: SvelteKitHandlerOptions = {},
+): SvelteKitRouteHandlers {
+  const handle: SvelteKitRoute = ({ request, platform }) =>
+    respond(
+      cms,
+      request,
+      options.waitUntil ??
+        boundWaitUntil((platform as { ctx?: unknown } | undefined)?.ctx),
+    );
   return {
     GET: handle,
     POST: handle,

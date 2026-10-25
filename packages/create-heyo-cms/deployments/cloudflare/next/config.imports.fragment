@@ -1,1 +1,2 @@
+import { cloudflareImages, type CloudflareImagesBinding } from "@heyo-sh/heyo-cms/uploads"; // prettier-ignore
 import type { ImagesConfig } from "@heyo-sh/heyo-cms/types";

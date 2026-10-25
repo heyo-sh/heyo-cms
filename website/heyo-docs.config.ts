@@ -29,6 +29,7 @@ export default heyoDocs({
             "fields",
             "hooks",
             "media",
+            "seo",
             "rbac",
             "i18n",
             "ai",

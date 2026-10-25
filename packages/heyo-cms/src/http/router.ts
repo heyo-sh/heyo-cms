@@ -119,7 +119,7 @@ export class Router {
   routes(basePath: string): RouteInspection[] {
     return this.compiled.map((route) => ({
       method: route.method,
-      path: route.path === "/" ? basePath : `${basePath}${route.path}`,
+      path: route.path === "/" ? basePath || "/" : `${basePath}${route.path}`,
       source: route.source,
       middleware: route.middleware?.length ?? 0,
     }));

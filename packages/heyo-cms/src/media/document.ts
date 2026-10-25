@@ -3,6 +3,7 @@ import type { JsonObject, JsonValue } from "../types/json";
 import type { CropRect, FocalPoint, MediaDocument, MediaStatus } from "../types/media"; // prettier-ignore
 import type { Row } from "../types/query";
 import type { StorageAdapter } from "../types/storage";
+import { publicOriginalUrl } from "./urls";
 
 /**
  * Metadata keys the engine owns.
@@ -19,15 +20,17 @@ export const reservedMetadata = ["crop", "variants"] as const;
 /**
  * A `media` row as the rest of the world sees it.
  *
- * `url` is the adapter's public URL rather than a signed one: signing is
- * cryptography, and making this asynchronous would charge every list of
- * twenty-five files twenty-five signatures for a feature most deployments do
- * not use. A private bucket signs at the moment of serving instead, which is
- * what `cms.media.variant()` returns.
+ * `url` is where the deployment serves the file: under `uploads.publicPath`
+ * when there is one, otherwise the adapter's public URL. Never a signed one:
+ * signing is cryptography, and making this asynchronous would charge every
+ * list of twenty-five files twenty-five signatures for a feature most
+ * deployments do not use. A private bucket signs at the moment of serving
+ * instead, which is what `cms.media.variant()` returns.
  */
 export function toMediaDocument(
   row: Row,
   storage: StorageAdapter,
+  publicPath?: string,
 ): MediaDocument {
   const metadata = asObject(row.metadata);
   const { crop, variants, ...rest } = metadata;
@@ -56,7 +59,12 @@ export function toMediaDocument(
     createdBy: optionalString(row.created_by),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
-    url: storage.url(key),
+    url:
+      publicOriginalUrl(publicPath, {
+        id: String(row.id),
+        filename: String(row.filename),
+        mimeType: String(row.mime_type),
+      }) ?? storage.url(key),
   };
 }
 

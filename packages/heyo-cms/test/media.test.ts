@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, test } from "bun:test";
 
 import { defineCollection, heyoCms, systemActor } from "../src/config";
+import { CmsError } from "../src/errors";
 import { mongodb } from "../src/db/mongodb";
 import { postgres, type PostgresClient } from "../src/db/postgres";
 import { sqlite } from "../src/db/sqlite";
@@ -762,7 +763,7 @@ function runMediaSuite(entry: EngineUnderTest): void {
           processor,
           variants: {
             mode: "pregenerate",
-            sizes: { thumb: { width: 320 }, hero: { width: 1920 } },
+            sizes: { thumb: { width: 320 }, hero: { width: 960 } },
           },
         },
       });
@@ -775,6 +776,187 @@ function runMediaSuite(entry: EngineUnderTest): void {
       expect(cached?.cached).toBe(true);
       await drain(cached?.body);
       await cms.close();
+    });
+
+    test("a size that would not change the image is answered with the original", async () => {
+      const processor = fakeProcessor();
+      const { cms } = await setup({
+        images: {
+          processor,
+          crop: true,
+          variants: {
+            mode: "on-demand",
+            sizes: {
+              hero: { width: 1920 },
+              tall: { height: 2000, fit: "outside" },
+              square: { width: 1600, height: 1600, fit: "cover" },
+            },
+          },
+        },
+      });
+      const file = await upload(cms);
+
+      for (const name of ["hero", "tall"]) {
+        const result = await cms.media.variant({ id: file.id, variant: name });
+        // 1200x800 inside 1920 wide, or covering 2000 high without
+        // enlarging: the same pixels, so the same object, and no render.
+        expect(result?.key).toBe(file.storageKey);
+        expect([result?.width, result?.height]).toEqual([1200, 800]);
+        await drain(result?.body);
+      }
+      expect(processor.calls).toHaveLength(0);
+
+      // A crop to a new aspect ratio is a different picture, always.
+      const square = await cms.media.variant({ id: file.id, variant: "square" }); // prettier-ignore
+      expect(square?.key).not.toBe(file.storageKey);
+      await drain(square?.body);
+      expect(processor.calls).toHaveLength(1);
+
+      // So is a crop, whatever the size asks for.
+      await cms.media.update({
+        id: file.id,
+        crop: { x: 0, y: 0, width: 600, height: 400 },
+      });
+      const cropped = await cms.media.variant({ id: file.id, variant: "hero" });
+      expect(cropped?.key).not.toBe(file.storageKey);
+      await drain(cropped?.body);
+      expect(processor.calls).toHaveLength(2);
+      await cms.close();
+    });
+
+    test("a variant the processor fails to render falls back to the original, unstored", async () => {
+      const processor = fakeProcessor();
+      let failing = true;
+      const flaky: ImageProcessor = {
+        ...processor,
+        async transform(source, transform, info) {
+          if (failing) {
+            throw Object.assign(new Error("Out of transformations"), {
+              code: 9422,
+            });
+          }
+          return processor.transform(source, transform, info);
+        },
+      };
+      const { cms, events, exists } = await setup({
+        images: {
+          processor: flaky,
+          variants: { mode: "on-demand", sizes: { thumb: { width: 320 } } },
+        },
+      });
+      const file = await upload(cms);
+
+      const first = await cms.media.variant({ id: file.id, variant: "thumb" });
+      expect(first?.key).toBe(file.storageKey);
+      expect(first?.processingError).toBe("Out of transformations (9422)");
+      expect(first?.cached).toBe(false);
+      await drain(first?.body);
+
+      // The page asks again; one report per file and size, not per request.
+      await drain(
+        (await cms.media.variant({ id: file.id, variant: "thumb" }))?.body,
+      );
+      await cms.drainEvents();
+      const failures = events.filter(
+        (event) => event.type === "media.processing.failed",
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.data.variant).toBe("thumb");
+      expect(failures[0]?.data.error).toBe("Out of transformations (9422)");
+
+      // Nothing was written under the size's key, so recovery is automatic.
+      expect((await cms.media.get(file.id))?.variants).toEqual([]);
+      failing = false;
+      const second = await cms.media.variant({ id: file.id, variant: "thumb" });
+      expect(second?.processingError).toBeNull();
+      expect(second?.key).not.toBe(file.storageKey);
+      expect(await exists(second!.key)).toBe(true);
+      await drain(second?.body);
+      await cms.close();
+    });
+
+    test("an upload the processor fails to convert stores the original and says so", async () => {
+      const { cms, events } = await setup({
+        images: {
+          processor: {
+            id: "broken",
+            supports: () => true,
+            transform: () => Promise.reject(new Error("service unavailable")),
+          },
+          convert: { to: "webp" },
+        },
+      });
+      const file = await upload(cms);
+      expect(file.mimeType).toBe("image/png");
+      expect([file.width, file.height]).toEqual([1200, 800]);
+
+      await cms.drainEvents();
+      const failure = events.find(
+        (event) => event.type === "media.processing.failed",
+      );
+      expect(failure?.data.variant).toBeNull();
+      expect(failure?.data.error).toBe("service unavailable");
+      expect((failure?.data.media as JsonObject).id).toBe(file.id);
+      await cms.close();
+    });
+
+    test("a processor that is not set up at all still fails the upload", async () => {
+      const { cms } = await setup({
+        images: {
+          processor: {
+            id: "absent",
+            supports: () => true,
+            transform: () =>
+              Promise.reject(
+                new CmsError("No binding.", {
+                  status: 500,
+                  code: "image_processor_missing",
+                }),
+              ),
+          },
+          convert: { to: "webp" },
+        },
+      });
+      await expect(upload(cms)).rejects.toThrow("No binding.");
+      await cms.close();
+    });
+
+    test("a file already in the target format is not re-encoded", async () => {
+      const processor = fakeProcessor();
+      const { cms } = await setup({
+        images: { processor, convert: { to: "webp" } },
+      });
+      const bytes = webpFixture(800, 600);
+      const file = await cms.media.upload({
+        file: bytes,
+        filename: "line-art.webp",
+        contentType: "image/webp",
+        actor,
+      });
+      // A lossless WebP stays the file that was uploaded.
+      expect(processor.calls).toHaveLength(0);
+      expect(file.mimeType).toBe("image/webp");
+      expect(file.size).toBe(bytes.byteLength);
+
+      // Too large still means a resize, which is a re-encode with a reason.
+      const { cms: limited } = await setup({
+        images: {
+          processor,
+          convert: { to: "webp" },
+          maxDimensions: { width: 400, height: 400 },
+        },
+      });
+      await limited.media.upload({
+        file: webpFixture(800, 600),
+        filename: "big.webp",
+        contentType: "image/webp",
+        actor,
+      });
+      expect(processor.calls).toHaveLength(1);
+      expect(processor.calls[0]?.format).toBeUndefined();
+      expect(processor.calls[0]?.width).toBe(400);
+      await cms.close();
+      await limited.close();
     });
 
     test("without a processor the original is served and the URL carries the size", async () => {

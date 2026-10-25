@@ -27,7 +27,18 @@ export interface SqliteStatement {
 
 export interface SqliteOptions {
   id?: string;
+  /**
+   * How long a write waits for another connection's lock, in milliseconds,
+   * before it fails with "database is locked". Defaults to 5000, the value
+   * `better-sqlite3` uses; `bun:sqlite` and `node:sqlite` start at 0, which
+   * fails the moment a second process — the CLI next to a dev server — is
+   * writing. A timeout the database was already given is kept unless this
+   * is set.
+   */
+  busyTimeout?: number;
 }
+
+const DEFAULT_BUSY_TIMEOUT = 5000;
 
 export interface SqliteFileOptions extends SqliteOptions {
   /** Path on disk. `:memory:` is accepted and is what the tests use. */
@@ -71,8 +82,10 @@ class SqliteDriver implements SqlDriver {
 /**
  * Creates the SQLite adapter.
  *
- * Transactions use the generic `BEGIN`/`COMMIT` path in the adapter: SQLite
- * has exactly one writer, so there is no pool to pin a transaction to.
+ * Transactions use the generic `BEGIN`/`COMMIT` path in the adapter, opened
+ * as `BEGIN IMMEDIATE` (see `sqliteDialect`): SQLite has exactly one writer,
+ * so there is no pool to pin a transaction to, and the write lock is better
+ * taken up front, where the busy timeout below can wait for it.
  *
  * Passing `{ file }` opens the database on first use through whichever SQLite
  * the runtime provides — `bun:sqlite` or `node:sqlite` — so a configuration
@@ -90,9 +103,36 @@ export function sqlite(
   if ("file" in source && typeof source.file === "string") {
     return async () => sqlite(await openFile(source.file), source);
   }
+  const database = source as SqliteDatabase;
+  applyBusyTimeout(database, options.busyTimeout);
   return new SqlDatabaseAdapter(
-    new SqliteDriver(source as SqliteDatabase, options.id ?? "sqlite"),
+    new SqliteDriver(database, options.id ?? "sqlite"),
     sqliteDialect,
+  );
+}
+
+/**
+ * One file, one writer at a time: SQLite makes every other writer wait for
+ * the lock, and this is how long. Without it, `heyo-cms seed` run while
+ * `dev` is serving a Cloudflare project's local D1 fails at random.
+ */
+function applyBusyTimeout(
+  database: SqliteDatabase,
+  explicit: number | undefined,
+): void {
+  if (explicit === undefined) {
+    const [current] = database.prepare("PRAGMA busy_timeout").all() as {
+      timeout?: number;
+    }[];
+    if (Number(current?.timeout ?? 0) > 0) return;
+  } else if (!Number.isFinite(explicit) || explicit < 0) {
+    throw new CmsConfigError(
+      "database",
+      "busyTimeout must be a number of milliseconds, 0 or more",
+    );
+  }
+  database.exec(
+    `PRAGMA busy_timeout = ${Math.trunc(explicit ?? DEFAULT_BUSY_TIMEOUT)}`,
   );
 }
 

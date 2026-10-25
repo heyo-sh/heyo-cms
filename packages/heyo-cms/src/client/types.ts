@@ -6,7 +6,7 @@ import type {
 import type { CmsInstance } from "../types/instance";
 import type { ActivityListArgs, ActivityPage } from "../types/activity";
 import type { ApiKeyRecord, CmsUser, IssuedApiKey, RoleRecord, SignInResult } from "../types/auth"; // prettier-ignore
-import type { FindResult } from "../types/api";
+import type { FindResult, PreviousSlug, SlugResolution } from "../types/api";
 import type { JsonObject } from "../types/json";
 import type { LocaleRecord } from "../types/locales";
 import type {
@@ -104,6 +104,26 @@ export interface ClientCollection<TDoc> {
   restore(args: { id: string } & ClientReadArgs): Promise<TDoc | null>;
   schedule(args: ClientScheduleArgs<TDoc>): Promise<TDoc | null>;
   unschedule(args: { id: string } & ClientReadArgs): Promise<TDoc | null>;
+  /** `GET /<collection>/resolve-slug`; null when no readable document has it. */
+  resolveSlug(
+    slug: string,
+    args?: { field?: string } & Omit<ClientReadArgs, "includeTrashed">,
+  ): Promise<SlugResolution<TDoc> | null>;
+  previousSlugs(
+    args: { id: string; field?: string } & ClientLocaleArgs & ClientCallArgs,
+  ): Promise<PreviousSlug[]>;
+  addPreviousSlug(
+    args: { id: string; slug: string; field?: string } & ClientLocaleArgs & ClientCallArgs, // prettier-ignore
+  ): Promise<PreviousSlug[]>;
+  removePreviousSlug(
+    args: { id: string; slug: string; field?: string } & ClientLocaleArgs & ClientCallArgs, // prettier-ignore
+  ): Promise<PreviousSlug[]>;
+}
+
+/** Per-call transport options. */
+export interface ClientCallArgs {
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 export interface ClientGlobal<TDoc> {

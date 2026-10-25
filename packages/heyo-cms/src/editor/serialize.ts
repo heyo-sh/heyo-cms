@@ -2,7 +2,9 @@ import type {
   RenderRichTextOptions,
   RichTextDocument,
   RichTextFormat,
+  RichTextImageOptions,
   RichTextMark,
+  RichTextMediaImage,
   RichTextNode,
 } from "../types/editor";
 import type { JsonValue } from "../types/json";
@@ -32,6 +34,10 @@ export function renderRichText(
     index: 0,
     depth: 0,
     ...(options.mediaUrl === undefined ? {} : { mediaUrl: options.mediaUrl }),
+    ...(options.mediaImage === undefined
+      ? {}
+      : { mediaImage: options.mediaImage }),
+    ...(options.images === undefined ? {} : { images: options.images }),
   });
   return options.format === "html" ? output : output.trim();
 }
@@ -68,6 +74,8 @@ interface WalkOptions {
   index: number;
   depth: number;
   mediaUrl?: (id: string) => string | null;
+  mediaImage?: (id: string) => RichTextMediaImage | null;
+  images?: RichTextImageOptions;
 }
 
 function serializeNode(node: RichTextNode, options: WalkOptions): string {
@@ -101,6 +109,10 @@ function serializeNode(node: RichTextNode, options: WalkOptions): string {
     depth: options.depth,
     index: options.index,
     ...(options.mediaUrl === undefined ? {} : { mediaUrl: options.mediaUrl }),
+    ...(options.mediaImage === undefined
+      ? {}
+      : { mediaImage: options.mediaImage }),
+    ...(options.images === undefined ? {} : { images: options.images }),
   });
 }
 

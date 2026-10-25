@@ -147,7 +147,7 @@ export class SqlDatabaseAdapter implements DatabaseAdapter {
     }
 
     this.transactionDepth += 1;
-    await this.driver.exec("BEGIN");
+    await this.driver.exec(this.dialect.beginTransaction ?? "BEGIN");
     try {
       const result = await fn(
         new SqlTx(nextTransactionId(), true, this.driver),

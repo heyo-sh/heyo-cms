@@ -1,4 +1,4 @@
-import type { CmsHandler } from "../types/instance";
+import { boundWaitUntil, handle as respond, type HandlerLike, type WaitUntil } from "./deliver"; // prettier-ignore
 
 /**
  * Astro.
@@ -17,13 +17,21 @@ import type { CmsHandler } from "../types/instance";
  * and the reason the import path names the framework instead of a flag doing
  * it.
  */
-export interface HandlerLike {
-  handler: CmsHandler;
-}
+export type { HandlerLike } from "./deliver";
 
 /** The shape of what Astro passes an endpoint. */
 export interface AstroContextLike {
   request: Request;
+  /**
+   * `@astrojs/cloudflare` puts the Worker's execution context here, and its
+   * `waitUntil` is used without being asked for.
+   */
+  locals?: unknown;
+}
+
+export interface AstroHandlerOptions {
+  /** For a platform whose `waitUntil` is not in `locals` (Vercel's, say). */
+  waitUntil?: WaitUntil;
 }
 
 export type AstroRoute = (context: AstroContextLike) => Promise<Response>;
@@ -39,8 +47,12 @@ export interface AstroRouteHandlers {
   ALL: AstroRoute;
 }
 
-export function cmsHandler(cms: HandlerLike): AstroRouteHandlers {
-  const handle: AstroRoute = ({ request }) => cms.handler(request);
+export function cmsHandler(
+  cms: HandlerLike,
+  options: AstroHandlerOptions = {},
+): AstroRouteHandlers {
+  const handle: AstroRoute = ({ request, locals }) =>
+    respond(cms, request, options.waitUntil ?? cloudflareWaitUntil(locals));
   return {
     GET: handle,
     POST: handle,
@@ -53,4 +65,14 @@ export function cmsHandler(cms: HandlerLike): AstroRouteHandlers {
     // with one named export if it prefers.
     ALL: handle,
   };
+}
+
+/**
+ * `Astro.locals.cfContext.waitUntil` (Astro 6 and later), or the older
+ * `locals.runtime.ctx.waitUntil`, bound to its context.
+ */
+function cloudflareWaitUntil(locals: unknown): WaitUntil | undefined {
+  const value = locals as
+    { cfContext?: unknown; runtime?: { ctx?: unknown } } | undefined;
+  return boundWaitUntil(value?.cfContext ?? value?.runtime?.ctx);
 }

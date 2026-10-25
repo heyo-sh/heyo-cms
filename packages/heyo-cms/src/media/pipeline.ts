@@ -23,6 +23,15 @@ export interface PreparedUpload {
   info: ImageInfo | null;
   checksum: string;
   extension: string;
+  /**
+   * Why the configured processing did not happen, when it failed.
+   *
+   * Null when it ran, or when there was nothing to run. Set when the
+   * processor threw and the original was stored instead (see
+   * `renderOriginal`): the upload succeeds, and the caller reports this as
+   * `media.processing.failed` so somebody can notice.
+   */
+  processingError: string | null;
 }
 
 export interface PrepareUploadOptions {
@@ -78,12 +87,14 @@ export async function prepareUpload(
   let data = options.bytes;
   let info = probed;
   let type = contentType;
+  let processingError: string | null = null;
 
   if (probed && images) {
     const rendered = await renderOriginal(data, probed, images, type);
     data = rendered.data;
     info = rendered.info;
     type = rendered.contentType;
+    processingError = rendered.error;
   }
 
   return {
@@ -95,6 +106,7 @@ export async function prepareUpload(
     // answerable after a conversion rather than only before one.
     checksum: hex(await sha256(data)),
     extension: extensionFor(type),
+    processingError,
   };
 }
 
@@ -102,6 +114,8 @@ interface RenderedOriginal {
   data: Uint8Array;
   info: ImageInfo;
   contentType: string;
+  /** Set when the processor failed and these are the unprocessed bytes. */
+  error: string | null;
 }
 
 /**
@@ -121,12 +135,19 @@ async function renderOriginal(
   const transform: ImageTransform = {};
 
   const convert = images.convert;
+  const alreadyConverted =
+    convert !== undefined && contentType === `image/${convert.to}`;
   if (
     convert &&
     !(convert.keep ?? []).includes(contentType) &&
     // Converting an SVG to WebP turns a vector into pixels; it is a drawing,
     // not a photograph, and no sensible default rasterises one.
-    info.format !== "svg"
+    info.format !== "svg" &&
+    // Already in the target format: "converting" it would only decode and
+    // re-encode it, which turns a lossless WebP into a lossy one at
+    // `quality` and buys nothing. A resize below still re-encodes, because
+    // then there are new pixels to encode.
+    !alreadyConverted
   ) {
     transform.format = convert.to;
   }
@@ -144,26 +165,75 @@ async function renderOriginal(
 
   if (needsProcessor && processor && processor.supports(contentType)) {
     if (images.stripMetadata !== false) transform.stripMetadata = true;
-    const result = await processor.transform(bytes, transform, info);
-    return {
-      data: result.data,
-      contentType: result.contentType,
-      info: {
-        format: info.format,
+    try {
+      const result = await processor.transform(bytes, transform, info);
+      return {
+        data: result.data,
         contentType: result.contentType,
-        width: result.width,
-        height: result.height,
-      },
-    };
+        info: {
+          format: info.format,
+          contentType: result.contentType,
+          width: result.width,
+          height: result.height,
+        },
+        error: null,
+      };
+    } catch (error) {
+      if (isProcessorMisconfigured(error)) throw error;
+      // The processor exists and failed: a quota that ran out (Cloudflare
+      // answers 9422 once a free account has used its transformations for
+      // the month), a service that is down, an image it could not decode.
+      // None of that makes the file unusable, so the original is stored as
+      // it arrived and the failure is reported instead of thrown. Refusing
+      // the upload would turn an optimisation into an outage of the editor.
+      return {
+        // What the processor would have stripped, the engine strips itself.
+        data:
+          images.stripMetadata !== false
+            ? stripImageMetadata(bytes, contentType)
+            : bytes,
+        info,
+        contentType,
+        error: describeError(error),
+      };
+    }
   }
 
-  // No processor, or one that does not handle this type: the bytes go in
-  // untouched, except that privacy does not get to be optional.
-  const stripped =
-    images.stripMetadata === true
-      ? stripImageMetadata(bytes, contentType)
-      : bytes;
-  return { data: stripped, info, contentType };
+  // No processor, or one that does not handle this type, or nothing for it to
+  // do: the bytes go in untouched, except that privacy does not get to be
+  // optional. A file skipped only because it was already in the target
+  // format is stripped as the processor would have stripped it.
+  const strip =
+    images.stripMetadata === true ||
+    (alreadyConverted &&
+      processor !== undefined &&
+      images.stripMetadata !== false);
+  const stripped = strip ? stripImageMetadata(bytes, contentType) : bytes;
+  return { data: stripped, info, contentType, error: null };
+}
+
+/**
+ * A processor that cannot run at all, as opposed to one that failed once.
+ *
+ * `image_processor_missing` is a deployment mistake — no binding, no `sharp`
+ * installed — and degrading to the original would hide it until somebody
+ * wondered, months later, why nothing was ever converted. Every other error
+ * is the kind that goes away on its own.
+ */
+export function isProcessorMisconfigured(error: unknown): boolean {
+  return error instanceof CmsError && error.code === "image_processor_missing";
+}
+
+export function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    // Cloudflare's binding throws errors with a numeric `code` (9422 is "out
+    // of transformations"); keeping it is what makes the event actionable.
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "number" || (typeof code === "string" && code !== "")
+      ? `${error.message} (${String(code)})`
+      : error.message;
+  }
+  return String(error);
 }
 
 /**

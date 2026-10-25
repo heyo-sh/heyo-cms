@@ -1,5 +1,5 @@
 import { CmsError } from "../errors";
-import type { CmsHandler } from "../types/instance";
+import { boundWaitUntil, handle as respond, type HandlerLike, type WaitUntil } from "./deliver"; // prettier-ignore
 
 /**
  * Nuxt (h3).
@@ -26,9 +26,7 @@ import type { CmsHandler } from "../types/instance";
  * The generator has no Nuxt template in v1 (stage 10); the adapter is here
  * because the contract is the same one every other framework gets.
  */
-export interface HandlerLike {
-  handler: CmsHandler;
-}
+export type { HandlerLike } from "./deliver";
 
 interface WebEvent {
   web: { request: Request };
@@ -46,10 +44,25 @@ interface NodeEvent {
 
 export type NuxtEvent = Request | WebEvent | NodeEvent;
 
+export interface NuxtHandlerOptions {
+  /**
+   * Delivers a write's events before the runtime freezes. h3's own
+   * `event.waitUntil` is used when the event has one.
+   */
+  waitUntil?: WaitUntil;
+}
+
 export function cmsHandler(
   cms: HandlerLike,
+  options: NuxtHandlerOptions = {},
 ): (event: NuxtEvent) => Promise<Response> {
-  return async (event: NuxtEvent) => cms.handler(await toRequest(event));
+  return async (event: NuxtEvent) =>
+    respond(
+      cms,
+      await toRequest(event),
+      options.waitUntil ??
+        (event instanceof Request ? undefined : boundWaitUntil(event)),
+    );
 }
 
 async function toRequest(event: NuxtEvent): Promise<Request> {

@@ -512,6 +512,21 @@ export interface UploadsConfig {
   limits?: UploadLimits;
   images?: ImagesConfig;
   retention?: RetentionConfig;
+  /**
+   * Where the site serves its own files, outside the API: `"/media"`.
+   *
+   * With it, `cms.handler` answers `GET /media/<id>/<name>` and
+   * `/media/<id>/<size>/<name>` — mount the handler on that path as well as
+   * on `basePath` — and every URL the CMS produces for a file points there:
+   * `MediaDocument.url`, `cms.media.url()`, `srcset`s and rich text. The name
+   * at the end is the uploaded file name as a slug, for people and image
+   * search; the route ignores it. Responses are cacheable for a year, because
+   * the bytes behind an id never change.
+   *
+   * Without it, files are served from `<basePath>/media/<id>/<size>` — which
+   * works, but sits under the API path a `robots.txt` usually closes.
+   */
+  publicPath?: string;
 }
 
 // ---------------------------------------------------------------------------
