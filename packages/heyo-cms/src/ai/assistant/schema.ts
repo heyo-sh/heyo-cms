@@ -29,6 +29,11 @@ export interface AssistantFieldDescription {
   options?: string[];
   /** Present for `relation`: the collection an id has to come from. */
   relationTo?: string;
+  /**
+   * Present for `list`: the fields of one row. The value is an array of
+   * objects with these keys, written whole.
+   */
+  rowFields?: { name: string; type: string; required: boolean; options?: string[] }[]; // prettier-ignore
   /** `false` means the actor may read it but not write it. */
   writable: boolean;
 }
@@ -136,18 +141,28 @@ function describeField(
   actor: Actor | null,
   locale: string,
 ): AssistantFieldDescription {
-  const options = field.options as { label?: unknown; options?: unknown };
-  const choices = Array.isArray(options.options)
-    ? options.options
-        .map((entry) =>
-          typeof entry === "string"
-            ? entry
-            : typeof entry === "object" && entry !== null
-              ? String((entry as { value?: unknown }).value ?? "")
-              : "",
+  const options = field.options as {
+    label?: unknown;
+    options?: unknown;
+    fields?: unknown;
+  };
+  const choices = choiceList(options.options);
+  const row =
+    field.type === "list" &&
+    typeof options.fields === "object" &&
+    options.fields !== null
+      ? Object.entries(options.fields as Record<string, FieldDefinition>).map(
+          ([key, item]) => {
+            const legal = choiceList(item.options.options);
+            return {
+              name: key,
+              type: item.type,
+              required: item.required,
+              ...(legal && legal.length > 0 ? { options: legal } : {}),
+            };
+          },
         )
-        .filter((entry) => entry.length > 0)
-    : undefined;
+      : undefined;
 
   return {
     name,
@@ -157,8 +172,23 @@ function describeField(
     localized: field.localized === true,
     ...(choices && choices.length > 0 ? { options: choices } : {}),
     ...(field.relationTo === undefined ? {} : { relationTo: field.relationTo }),
+    ...(row ? { rowFields: row } : {}),
     writable: mayWriteField(collection, name, actor, locale),
   };
+}
+
+/** The legal values of a `select` or `multiselect`, as plain strings. */
+function choiceList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw
+    .map((entry) =>
+      typeof entry === "string"
+        ? entry
+        : typeof entry === "object" && entry !== null
+          ? String((entry as { value?: unknown }).value ?? "")
+          : "",
+    )
+    .filter((entry) => entry.length > 0);
 }
 
 /** Whether a field could be written at all by this actor, right now. */

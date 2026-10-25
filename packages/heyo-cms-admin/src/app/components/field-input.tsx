@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 
 import { fieldComponent } from "../lib/extensions";
+import { ListField } from "./list-field";
 import { MediaField } from "./media-field";
 import { RelationField } from "./relation-field";
 import { SlugField } from "./slug-field";
@@ -146,6 +147,9 @@ export function FieldInput(props: FieldInputProps) {
 
     case "json":
       return <JsonInput {...props} />;
+
+    case "list":
+      return <ListField {...props} />;
 
     case "email":
     case "url":

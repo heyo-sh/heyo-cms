@@ -10,6 +10,7 @@ import {
   boolean,
   date,
   json,
+  list,
   media,
   multiselect,
   number,
@@ -45,21 +46,22 @@ text({
 
 ## The types
 
-| Type          | Stores               | Notable options                           |
-| ------------- | -------------------- | ----------------------------------------- |
-| `text`        | string               | `minLength`, `maxLength`, `pattern`       |
-| `textarea`    | string               | the same, rendered as a box               |
-| `richText`    | ProseMirror document | `nodes` — which nodes the panel offers    |
-| `number`      | number               | `integer`, `min`, `max`                   |
-| `boolean`     | boolean              | `default`                                 |
-| `date`        | ISO string           | `mode: "date" \| "datetime"`              |
-| `select`      | one of `options`     | `options`, `default`                      |
-| `multiselect` | an array of options  | `minItems`, `maxItems`                    |
-| `media`       | a `media` row id     | `accept` — a hint for the picker          |
-| `relation`    | an id, or ids        | `relation("authors", { many: true })`     |
-| `slug`        | a URL slug           | `from`, `history`, `maxLength`            |
-| `json`        | anything JSON        | use `defineField()` for custom validation |
-| `seoFields()` | four fields at once  | spread into `fields`                      |
+| Type          | Stores               | Notable options                            |
+| ------------- | -------------------- | ------------------------------------------ |
+| `text`        | string               | `minLength`, `maxLength`, `pattern`        |
+| `textarea`    | string               | the same, rendered as a box                |
+| `richText`    | ProseMirror document | `nodes` — which nodes the panel offers     |
+| `number`      | number               | `integer`, `min`, `max`                    |
+| `boolean`     | boolean              | `default`                                  |
+| `date`        | ISO string           | `mode: "date" \| "datetime"`               |
+| `select`      | one of `options`     | `options`, `default`                       |
+| `multiselect` | an array of options  | `minItems`, `maxItems`                     |
+| `media`       | a `media` row id     | `accept` — a hint for the picker           |
+| `relation`    | an id, or ids        | `relation("authors", { many: true })`      |
+| `slug`        | a URL slug           | `from`, `history`, `maxLength`             |
+| `json`        | anything JSON        | use `defineField()` for custom validation  |
+| `list`        | an array of rows     | `fields` — one row; `minItems`, `maxItems` |
+| `seoFields()` | four fields at once  | spread into `fields`                       |
 
 `index: true` creates a non-unique, collection-scoped database index on the
 field's value in the `documents` JSON body. It can speed up filtered lookups
@@ -159,6 +161,49 @@ using the current draft. `fields` contains readable sibling values in the
 current locale. Its result is validated against the target field schema,
 inserted into the form, and is **not saved** until the editor saves. An
 `aiGenerate` button can sit beside it; it uses AI and shows a preview first.
+
+## Lists
+
+`list()` is an ordered list of rows that share a few fields: the questions of
+an FAQ, the sources of an article, a change log. The structure is the field's,
+so nobody has to remember a format and nothing has to parse one:
+
+```ts
+faq: list({
+  localized: true,
+  maxItems: 12,
+  fields: {
+    question: text({ required: true, maxLength: 160 }),
+    answer: textarea({ required: true, description: "Markdown." }),
+  },
+}),
+references: list({
+  fields: {
+    title: text({ required: true }),
+    url: url({ required: true }),
+    publisher: text(),
+  },
+}),
+```
+
+The value is an array of objects — `[{ question: "…", answer: "…" }]` — stored
+as JSON in the document, typed from the row's fields, and validated row by
+row with their own schemas. A required field must be in every row; an
+optional one may be `null` or left out; a key the row does not declare is an
+error rather than a value silently dropped. A refused write names the row and
+the field: `faq #2 question: is required`.
+
+The list is the field: `localized`, `required`, `access`, `label` and
+`description` go on the list, and a translation is a whole list of its own. A
+row holds `text`, `textarea`, `email`, `url`, `number`, `boolean`, `date`,
+`select` and `multiselect` fields; a relation, a media file, rich text or a
+slug needs a loader, an editor or a uniqueness check that does not reach
+inside a row, and is refused when the configuration loads, as are `localized`,
+`unique`, `index` and `access` on a row's field.
+
+In the panel each row is a small form, with buttons to move it and remove it
+and one to add a row; the list view shows how many rows a document has. The
+OpenAPI document describes the row, and the AI assistant is told its fields.
 
 ## Your own field
 

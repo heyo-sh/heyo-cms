@@ -5,11 +5,13 @@ import { defineCollection, heyoCms } from "../src/config";
 import { sqlite } from "../src/db/sqlite";
 
 import { CmsConfigError } from "../src/errors";
+import type { FieldDefinition } from "../src/types/fields";
 import {
   boolean,
   date,
   defineField,
   json,
+  list,
   media,
   multiselect,
   number,
@@ -20,6 +22,8 @@ import {
   seoFields,
   slug,
   text,
+  textarea,
+  url,
 } from "../src/fields";
 
 describe("field builders", () => {
@@ -54,6 +58,70 @@ describe("field builders", () => {
     expect(tags.column).toMatchObject({ type: "json", array: true });
     expect(tags.schema.safeParse(["a", "b"]).success).toBe(true);
     expect(tags.schema.safeParse(["c"]).success).toBe(false);
+  });
+
+  test("a list validates every row with its fields' own schemas", () => {
+    const sources = list({
+      fields: {
+        title: text({ required: true }),
+        url: url(),
+        year: number({ integer: true }),
+      },
+      maxItems: 3,
+    });
+    expect(sources.type).toBe("list");
+    expect(sources.column).toMatchObject({ type: "json", array: true });
+
+    const ok = (value: unknown) => sources.schema.safeParse(value).success;
+    expect(ok([{ title: "A", url: "https://a.example", year: 2024 }])).toBe(
+      true,
+    );
+    // An optional field may be null or left out; the list may be empty or null.
+    expect(ok([{ title: "A", url: null }, { title: "B" }])).toBe(true);
+    expect(ok([])).toBe(true);
+    expect(ok(null)).toBe(true);
+    // A row is checked by its fields, and a misspelt key is not dropped.
+    expect(ok([{ url: "https://a.example" }])).toBe(false);
+    expect(ok([{ title: "A", url: "not a url" }])).toBe(false);
+    expect(ok([{ title: "A", year: 1.5 }])).toBe(false);
+    expect(ok([{ title: "A", tilte: "typo" }])).toBe(false);
+    expect(ok([{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }])).toBe(false); // prettier-ignore
+    expect(ok({ title: "A" })).toBe(false);
+
+    // The static type is the row, required keys and optional ones (checked by `tsc`).
+    type Value<F> = F extends FieldDefinition<infer T> ? T : never;
+    const rows: Value<typeof sources> = [{ title: "A" }, { title: "B", url: null, year: 2024 }]; // prettier-ignore
+    // @ts-expect-error `title` is required in every row
+    const missing: Value<typeof sources> = [{ url: "https://a.example" }];
+    expect([rows, missing]).toHaveLength(2);
+  });
+
+  test("a list is localized as a whole, and refuses what cannot live in a row", () => {
+    const faq = list({
+      localized: true,
+      required: true,
+      fields: { question: text({ required: true }), answer: textarea() },
+    });
+    expect(faq.localized).toBe(true);
+    expect(faq.schema.safeParse(null).success).toBe(false);
+
+    const refused = (build: () => unknown) => {
+      try {
+        build();
+        return null;
+      } catch (error) {
+        expect(error).toBeInstanceOf(CmsConfigError);
+        return (error as Error).message;
+      }
+    };
+    expect(refused(() => list({ fields: {} }))).toContain("at least one field"); // prettier-ignore
+    expect(refused(() => list({ fields: { who: relation("authors") } }))).toContain("cannot hold a relation field"); // prettier-ignore
+    expect(refused(() => list({ fields: { body: richText() } }))).toContain("cannot hold a richText field"); // prettier-ignore
+    expect(refused(() => list({ fields: { q: text({ localized: true }) } }))).toContain("set localized on the list"); // prettier-ignore
+    expect(refused(() => list({ fields: { q: text({ unique: true }) } }))).toContain("not supported inside a list row"); // prettier-ignore
+    expect(refused(() => list({ fields: { "two words": text() } }))).toContain("identifier"); // prettier-ignore
+    expect(refused(() => list({ fields: { q: text() }, index: true }))).toContain("cannot be unique or indexed"); // prettier-ignore
+    expect(refused(() => list({ fields: { q: text() }, minItems: 3, maxItems: 1 }))).toContain("maxItems"); // prettier-ignore
   });
 
   test("slug is unique and indexed, per language when localized", () => {

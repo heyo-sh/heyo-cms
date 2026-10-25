@@ -68,6 +68,8 @@ export interface PanelField {
   };
   ai: PanelFieldAiAction[];
   access: PanelAccessFlags;
+  /** A `list`'s row: the fields every row has, in order. */
+  fields?: PanelField[];
 }
 
 export interface PanelCollection {
