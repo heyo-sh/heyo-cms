@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import { heyoCms, defineCollection } from "../../src/config";
-import { date, media, number, select, text } from "../../src/fields";
-import { and, eq, gt, orderBy } from "../../src/query";
+import {
+  date,
+  media,
+  multiselect,
+  number,
+  select,
+  text,
+} from "../../src/fields";
+import { and, contains, eq, gt, orderBy } from "../../src/query";
 import { planMigration } from "../../src/schema/plan";
 import { emptySnapshot } from "../../src/schema/snapshot";
 import type { DatabaseAdapter } from "../../src/types/database";
@@ -41,6 +48,7 @@ export function contractSchema(): SchemaSnapshot {
           views: number({ integer: true }),
           publishedAt: date({}),
           cover: media({}),
+          tags: multiselect({ options: ["museum", "loan", "archive"] }),
         },
       }),
       pages: defineCollection({
@@ -176,6 +184,38 @@ export function runDatabaseAdapterContract(entry: AdapterUnderTest): void {
           orderBy: [orderBy("views", "desc")],
         });
         expect(popular.map((row) => row.id)).toEqual(["doc_3", "doc_2"]);
+      });
+      await adapter.close?.();
+    });
+
+    test("finds a value in a list, and never fails on a body where the list is not one", async () => {
+      const adapter = await prepare();
+      await adapter.transaction(async (tx) => {
+        await insertPost(adapter, tx, "doc_list", { title: "A list", tags: ["museum", "loan"] }); // prettier-ignore
+        await insertPost(adapter, tx, "doc_other", { title: "Another list", tags: ["archive"] }); // prettier-ignore
+        await insertPost(adapter, tx, "doc_empty", { title: "An empty list", tags: [] }); // prettier-ignore
+        // What a document written before the field existed, or written
+        // without it, holds: no value, a JSON null, a lone value.
+        await insertPost(adapter, tx, "doc_missing", { title: "No list" });
+        await insertPost(adapter, tx, "doc_null", {
+          title: "A null",
+          tags: null,
+        });
+        await insertPost(adapter, tx, "doc_scalar", { title: "One value", tags: "loan" }); // prettier-ignore
+
+        const ids = async (value: string) =>
+          (
+            await adapter.query(tx, {
+              table: "documents",
+              where: and(eq("collection", "posts"), contains("tags", value)),
+              orderBy: [orderBy("id")],
+            })
+          ).map((row) => row.id);
+
+        expect(await ids("museum")).toEqual(["doc_list"]);
+        // A lone value counts as a list of one, as MongoDB reads it.
+        expect(await ids("loan")).toEqual(["doc_list", "doc_scalar"]);
+        expect(await ids("nothing")).toEqual([]);
       });
       await adapter.close?.();
     });

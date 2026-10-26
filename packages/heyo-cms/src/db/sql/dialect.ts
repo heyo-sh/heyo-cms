@@ -89,7 +89,12 @@ export const postgresDialect: SqlDialect = {
       path.length === 0
         ? identifier(column)
         : `${identifier(column)} #> '{${path.map(escapeBracePath).join(",")}}'`;
-    return `EXISTS (SELECT 1 FROM jsonb_array_elements_text(${container}) AS membership(value) WHERE membership.value = ${placeholder})`;
+    // `jsonb_array_elements_text` refuses anything that is not an array, and
+    // one document whose value is a JSON null or a lone string would fail the
+    // whole query. A lone value is a list of one, as SQLite and MongoDB read
+    // it; null, an object or no value at all are an empty list.
+    const elements = `CASE WHEN jsonb_typeof(${container}) = 'array' THEN ${container} WHEN jsonb_typeof(${container}) IN ('string', 'number', 'boolean') THEN jsonb_build_array(${container}) ELSE '[]'::jsonb END`;
+    return `EXISTS (SELECT 1 FROM jsonb_array_elements_text(${elements}) AS membership(value) WHERE membership.value = ${placeholder})`;
   },
   likeOperator: (caseInsensitive) => (caseInsensitive ? "ILIKE" : "LIKE"),
   encode(value, type) {
@@ -168,10 +173,14 @@ export const sqliteDialect: SqlDialect = {
       : extracted;
   },
   jsonArrayMembership(column, path, placeholder) {
+    // `json_each(X, P)` walks the element at P inside the document. Walking
+    // `json_extract(X, P)` instead would hand a lone string over unquoted —
+    // which is not JSON, and fails the whole query — while the two-argument
+    // form treats it as a list of one, and a null or a missing value as none.
     const target =
       path.length === 0
         ? identifier(column)
-        : `json_extract(${identifier(column)}, '${jsonLiteralPath(path)}')`;
+        : `${identifier(column)}, '${jsonLiteralPath(path)}'`;
     return `EXISTS (SELECT 1 FROM json_each(${target}) WHERE json_each.value = ${placeholder})`;
   },
   // SQLite's LIKE is already case-insensitive for ASCII, and making it
