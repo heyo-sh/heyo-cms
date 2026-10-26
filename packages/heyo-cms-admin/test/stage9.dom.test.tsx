@@ -95,6 +95,7 @@ beforeAll(async () => {
             aiGenerate: { prompt: "Write a title.", context: ["notes"] },
           }),
           notes: text({}),
+          handle: text({ unique: true }),
           status: select({ options: ["draft", "published"], default: "draft" }),
         },
       }),
@@ -429,6 +430,30 @@ describe("the assistant, from the panel", () => {
     expect(container.textContent).toContain("conflict");
     const stored = await cms.api.posts.findById(id, { actor: admin });
     expect(stored?.title).toBe("And again");
+  });
+
+  test("a value another document has is refused without claiming somebody else saved", async () => {
+    await cms.api.posts.create({
+      data: { title: "Owner", handle: "taken" },
+      actor: admin,
+    });
+    const created = await cms.api.posts.create({
+      data: { title: "Mine" },
+      actor: admin,
+    });
+    const id = String(created?.id);
+
+    await mount(`/c/posts/${id}`);
+    await typeInto(input("Handle"), "taken");
+    await click(button("Save"));
+
+    // A 409 as well, but not a stale form: reloading "theirs" would throw
+    // the edit away and fix nothing. (The toast that names the field is the
+    // server's message, asserted in `http.test.ts`.)
+    expect(container.textContent).not.toContain("changed since you opened it");
+    expect(container.textContent).toContain("unsaved");
+    const stored = await cms.api.posts.findById(id, { actor: admin });
+    expect(stored?.handle ?? null).toBeNull();
   });
 });
 

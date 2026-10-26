@@ -614,6 +614,50 @@ describe("handler", () => {
     expect(answered.body).toMatchObject({ error: { code: "invalid_body" } });
   });
 
+  test("a value a unique field already has is a 409 that names the field", async () => {
+    const first = await call("/api/heyo-cms/posts", {
+      body: { data: { title: "First", handle: "taken" } },
+      actor: editor,
+    });
+    expect(first.status).toBe(201);
+
+    // Trashed, so not in the list an editor looks at, and still the owner.
+    await call(`/api/heyo-cms/posts/${String(first.body.id)}`, {
+      method: "DELETE",
+      actor: editor,
+    });
+
+    const second = await call("/api/heyo-cms/posts", {
+      body: { data: { title: "Second", handle: "taken" } },
+      actor: editor,
+    });
+    expect(second.status).toBe(409);
+    expect(second.body).toEqual({
+      error: {
+        code: "conflict",
+        status: 409,
+        message:
+          "posts: handle is already used by another document, possibly one in the trash.",
+        details: { fields: { handle: "is already used by another document" } },
+      },
+    });
+
+    // An update that takes it is refused the same way, and changes nothing.
+    const other = await call("/api/heyo-cms/posts", {
+      body: { data: { title: "Other", handle: "other" } },
+      actor: editor,
+    });
+    const renamed = await call(`/api/heyo-cms/posts/${String(other.body.id)}`, {
+      method: "PATCH",
+      body: { data: { handle: "taken" } },
+      actor: editor,
+    });
+    expect(renamed.status).toBe(409);
+    expect((await cms.api.posts.findById(String(other.body.id)))?.handle).toBe(
+      "other",
+    );
+  });
+
   test("an unexpected error does not leak its message", async () => {
     const built = await setup({
       databaseHooks: {

@@ -174,7 +174,10 @@ class MemoryCollection implements MongoLikeCollection {
     candidate: MongoDocument,
     replacing: MongoDocument | undefined,
   ): void {
-    for (const index of this.indexes) {
+    // Every MongoDB collection has a unique `_id_` index that cannot be
+    // dropped, so it is checked here without ever being created.
+    const primary: MemoryIndex = { name: "_id_", keys: ["_id"], unique: true };
+    for (const index of [primary, ...this.indexes]) {
       if (!index.unique) continue;
       if (index.partial && !matches(candidate, index.partial)) continue;
 

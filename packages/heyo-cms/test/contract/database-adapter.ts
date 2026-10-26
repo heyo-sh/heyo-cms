@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { heyoCms, defineCollection } from "../../src/config";
+import { CmsError } from "../../src/errors";
 import {
   date,
   media,
@@ -312,10 +313,42 @@ export function runDatabaseAdapterContract(entry: AdapterUnderTest): void {
           "pages",
         );
 
-        await expect(
-          insertPost(adapter, tx, "doc_3", { title: "C", handle: "shared" }),
-        ).rejects.toThrow();
+        // A 409 that names the field, not the driver's error: the index is
+        // the only check that cannot race, so its answer is the response.
+        const duplicate = await insertPost(adapter, tx, "doc_3", {
+          title: "C",
+          handle: "shared",
+        }).catch((error: unknown) => error);
+        expect(duplicate).toBeInstanceOf(CmsError);
+        expect(duplicate).toMatchObject({
+          status: 409,
+          code: "conflict",
+          details: {
+            fields: { handle: "is already used by another document" },
+          },
+        });
+        expect((duplicate as CmsError).message).toStartWith("posts: handle");
       });
+      await adapter.close?.();
+    });
+
+    test("refuses a duplicate id with a conflict that names it", async () => {
+      const adapter = await prepare();
+      await adapter.transaction(async (tx) => {
+        await insertPost(adapter, tx, "doc_taken", { title: "A" });
+      });
+      // Its own transaction: on Postgres a failed statement aborts the one
+      // it ran in.
+      const duplicate = await adapter
+        .transaction((tx) =>
+          insertPost(adapter, tx, "doc_taken", { title: "B" }),
+        ) // prettier-ignore
+        .catch((error: unknown) => error);
+      expect(duplicate).toBeInstanceOf(CmsError);
+      expect(duplicate).toMatchObject({ status: 409, code: "conflict" });
+      expect((duplicate as CmsError).message).toBe(
+        'A document with the id "doc_taken" already exists.',
+      );
       await adapter.close?.();
     });
 
