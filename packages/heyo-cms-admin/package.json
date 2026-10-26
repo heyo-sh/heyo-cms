@@ -38,9 +38,9 @@
     "@heyo-sh/heyo-cms": "0.3.1"
   },
   "devDependencies": {
-    "@happy-dom/global-registrator": "21.0.3",
+    "@happy-dom/global-registrator": "21.0.4",
     "@heyo-sh/heyo-cms": "workspace:*",
-    "@heyo-sh/heyo-ui": "0.4.1",
+    "@heyo-sh/heyo-ui": "0.5.1",
     "@tabler/icons-react": "3.48.0",
     "@tiptap/core": "3.32.0",
     "@tiptap/extension-emoji": "3.32.0",
