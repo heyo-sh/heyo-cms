@@ -18,6 +18,7 @@ import type {
   MigrationStep,
   SchemaSnapshot,
 } from "../../types/schema";
+import { uniqueConflict } from "../unique";
 import { SchemaCatalog, SqlCompiler } from "./compile";
 import { SqlDdlRenderer } from "./ddl";
 import type { SqlDialect } from "./dialect";
@@ -181,16 +182,30 @@ export class SqlDatabaseAdapter implements DatabaseAdapter {
     const driver = driverOf(tx, this.driver);
     const returning = statement.text.includes(" RETURNING ");
 
-    if (returning) {
-      const rows = await driver.all(statement.text, statement.values);
-      return {
-        rows: rows.map((row) => this.compiler.decodeRow(mutation.table, row)),
-        count: rows.length,
-      };
-    }
+    try {
+      if (returning) {
+        const rows = await driver.all(statement.text, statement.values);
+        return {
+          rows: rows.map((row) => this.compiler.decodeRow(mutation.table, row)), // prettier-ignore
+          count: rows.length,
+        };
+      }
 
-    const result = await driver.run(statement.text, statement.values);
-    return { rows: [], count: result.rowsAffected };
+      const result = await driver.run(statement.text, statement.values);
+      return { rows: [], count: result.rowsAffected };
+    } catch (error) {
+      // A duplicate is the caller's mistake, not the CMS's: the unique index
+      // is the only check that cannot race, so its error is the answer.
+      const violation = this.dialect.uniqueViolation(error);
+      if (violation === null) throw error;
+      throw uniqueConflict(
+        this.schema,
+        mutation.table,
+        violation,
+        mutation.kind === "insert" ? mutation.values : undefined,
+        error,
+      );
+    }
   }
 
   async close(): Promise<void> {

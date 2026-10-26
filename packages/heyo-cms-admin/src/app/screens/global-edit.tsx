@@ -160,7 +160,9 @@ export function GlobalEdit({ global }: { global: PanelCollection }) {
       // A refused save is a toast and nothing else: the pane beside the
       // writing is for the document's properties, not for a message about
       // the last attempt to store them.
-      if (cause instanceof ApiError && cause.status === 409) setConflict(true);
+      if (cause instanceof ApiError && cause.code === "revision_conflict") {
+        setConflict(true);
+      }
       toast.error(cause);
       return false;
     } finally {

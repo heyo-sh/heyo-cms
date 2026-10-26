@@ -274,10 +274,12 @@ export function DocumentEdit({
       }
       return true;
     } catch (cause) {
-      if (cause instanceof ApiError && cause.status === 409) {
+      if (cause instanceof ApiError && cause.code === "revision_conflict") {
         // Not an error to retry blindly: somebody — another editor, a
         // scheduled change, the assistant — wrote while this form was open,
-        // and the honest options are "look at theirs" or "keep mine".
+        // and the honest options are "look at theirs" or "keep mine". By the
+        // code, not the 409: a slug or a unique value somebody else already
+        // has is a 409 as well, and reloading would not fix that.
         setConflict(true);
       }
       // A refused save — a failed validation, a 403, a 409 — is a toast and

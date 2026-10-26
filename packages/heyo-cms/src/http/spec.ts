@@ -107,7 +107,7 @@ export function writeResponses(
     "403": okJson(ref("Error"), "Access control refused the operation."),
     "409": okJson(
       ref("Error"),
-      "`revision_conflict`: the document changed since the revision the caller sent in `If-Match`.",
+      "`revision_conflict`: the document changed since the revision the caller sent in `If-Match`. `conflict`: a slug or a `unique` field's value belongs to another document (a trashed one included); `details.fields` names the field.",
     ),
     "422": okJson(ref("Error"), "Validation failed."),
   };

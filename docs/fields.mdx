@@ -66,8 +66,10 @@ text({
 `index: true` creates a non-unique, collection-scoped database index on the
 field's value in the `documents` JSON body. It can speed up filtered lookups
 but adds storage and write cost; it is **not** full-text search. `unique: true`
-creates a unique index (no need to also set `index: true`). Localized values
-cannot be unique and are not indexed by the current implementation.
+creates a unique index (no need to also set `index: true`). A write that would
+repeat another document's value — a trashed one included — is refused with
+`409 conflict`, and `details.fields` names the field. Localized values cannot be
+unique and are not indexed by the current implementation.
 
 `admin.placeholder` is used by text, textarea, rich-text and select controls;
 media and other controls ignore it. `admin.hidden` removes the field from the

@@ -24,6 +24,7 @@ import type {
   SchemaSnapshot,
   TableSnapshot,
 } from "../types/schema";
+import { mongoUniqueViolation, uniqueConflict } from "./unique";
 
 // ---------------------------------------------------------------------------
 // Driver contract
@@ -269,7 +270,25 @@ export class MongoDatabaseAdapter implements DatabaseAdapter {
     );
   }
 
-  async mutate(_tx: Tx, mutation: Mutation): Promise<MutationResult> {
+  async mutate(tx: Tx, mutation: Mutation): Promise<MutationResult> {
+    try {
+      return await this.write(tx, mutation);
+    } catch (error) {
+      // The same answer the SQL engines give: a broken unique index is a 409
+      // the caller can act on, not an unknown driver error.
+      const violation = mongoUniqueViolation(error);
+      if (violation === null) throw error;
+      throw uniqueConflict(
+        this.schema,
+        mutation.table,
+        violation,
+        mutation.kind === "insert" ? mutation.values : undefined,
+        error,
+      );
+    }
+  }
+
+  private async write(_tx: Tx, mutation: Mutation): Promise<MutationResult> {
     const collection = this.database.collection(mutation.table);
 
     if (mutation.kind === "insert") {

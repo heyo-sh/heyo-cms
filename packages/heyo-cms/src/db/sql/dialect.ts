@@ -1,5 +1,10 @@
 import type { ColumnValue } from "../../types/query";
 import type { ColumnSnapshot, ColumnType } from "../../types/schema";
+import {
+  postgresUniqueViolation,
+  sqliteUniqueViolation,
+  type UniqueViolation,
+} from "../unique";
 
 /**
  * Everything two SQL engines disagree about.
@@ -25,6 +30,8 @@ export interface SqlDialect {
   likeOperator(caseInsensitive: boolean): string;
   encode(value: ColumnValue | undefined, type: ColumnType): unknown;
   decode(value: unknown, type: ColumnType): ColumnValue;
+  /** The unique rule a driver error reports breaking, or null. */
+  uniqueViolation(error: unknown): UniqueViolation | null;
   /** True when `ALTER TABLE ... ALTER COLUMN` exists. */
   readonly supportsAlterColumn: boolean;
   /** The statement that opens a transaction; `BEGIN` when absent. */
@@ -109,6 +116,7 @@ export const postgresDialect: SqlDialect = {
     if (type === "bigint" && typeof value === "string") return Number(value);
     return value as ColumnValue;
   },
+  uniqueViolation: postgresUniqueViolation,
   supportsAlterColumn: true,
 };
 
@@ -197,6 +205,7 @@ export const sqliteDialect: SqlDialect = {
     }
     return value as ColumnValue;
   },
+  uniqueViolation: sqliteUniqueViolation,
   supportsAlterColumn: false,
 };
 
