@@ -35,7 +35,7 @@
     "access": "public"
   },
   "dependencies": {
-    "typebox": "1.4.2",
+    "typebox": "1.4.3",
     "zod": "4.6.7"
   },
   "peerDependencies": {
