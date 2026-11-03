@@ -8,7 +8,7 @@
   "dependencies": {
     "@heyo-sh/heyo-cms": "workspace:*",
     "@heyo-sh/heyo-cms-admin": "workspace:*",
-    "pg": "^8.16.3",
+    "pg": "^8.23.1",
     "zod": "4.6.7"
   }
 }
