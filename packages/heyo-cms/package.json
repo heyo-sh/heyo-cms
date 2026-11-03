@@ -63,7 +63,7 @@
     }
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.5.11",
+    "@electric-sql/pglite": "0.5.13",
     "@mariozechner/pi-agent-core": "0.73.1",
     "@mariozechner/pi-ai": "0.73.1",
     "pg": "8.16.3"
