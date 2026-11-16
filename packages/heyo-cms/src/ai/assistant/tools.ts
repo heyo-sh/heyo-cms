@@ -67,9 +67,22 @@ export interface ToolContext {
   /** Spent by every tool call; the server's budget, not the model's. */
   spend: () => void;
   signal?: AbortSignal | undefined;
+  /**
+   * The revision of every record this run has read, by `revisionKey`.
+   *
+   * Revisions are the server's bookkeeping, and the model never sees one. It
+   * used to: every read answered with `revision`, every write asked for
+   * `expectedRevision`, and the model dutifully reported "saved, revision 3"
+   * to editors who had no idea what that was. Now a read records the
+   * revision here and a write is made against it — so a write still fails
+   * if somebody saved after the model read, and a record the model never
+   * read cannot be written at all.
+   */
+  revisions?: Map<string, number>;
 }
 
-export function createAssistantTools(context: ToolContext): AgentTool[] {
+export function createAssistantTools(given: ToolContext): AgentTool[] {
+  const context: ToolContext = { ...given, revisions: given.revisions ?? new Map() }; // prettier-ignore
   const tools: AgentTool[] = [
     describeCmsTool(context),
     currentPageTool(context),
@@ -181,9 +194,9 @@ function currentPageTool(context: ToolContext): AgentTool {
           page.locale,
           { forDisplay: true },
         );
+        remember(context, globalKey(page.collection), document.revision);
         return answer({
           global: page.collection.name,
-          revision: document.revision as JsonValue,
           record: renderRecord(
             page.collection,
             document,
@@ -214,9 +227,9 @@ function currentPageTool(context: ToolContext): AgentTool {
         page.locale,
         { forDisplay: true },
       );
+      remember(context, documentKey(page.collection, document.id), document.revision); // prettier-ignore
       return answer({
         documentId: String(document.id),
-        revision: document.revision as JsonValue,
         record: renderRecord(
           page.collection,
           document,
@@ -393,9 +406,9 @@ function findDocumentsTool(context: ToolContext): AgentTool {
           hasMore: (page.totalDocs ?? 0) > offset + docs.length || page.hasNextPage, // prettier-ignore
           results: docs.map((document) => {
             const untranslated = Object.keys(fallbackFields(document));
+            remember(context, documentKey(collection, document.id), document.revision); // prettier-ignore
             return {
               id: String(document.id),
-              revision: document.revision,
               title: recordTitle(document, title),
               summary: recordSummary(
                 collection,
@@ -420,7 +433,7 @@ function getDocumentTool(context: ToolContext): AgentTool {
     name: "get_document",
     label: "Read a document",
     description:
-      "Reads one document in one locale. Rich text comes back as Markdown. Note the `revision`: update_document needs it.",
+      "Reads one document in one locale. Rich text comes back as Markdown. Read a document before you change it.",
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       id: Type.String({ minLength: 1, maxLength: 200 }),
@@ -447,12 +460,12 @@ function getDocumentTool(context: ToolContext): AgentTool {
         { forDisplay: true },
       );
       const visible = readableFields(collection, context.actor, locale);
+      remember(context, documentKey(collection, document.id), document.revision); // prettier-ignore
 
       return toolText(
         JSON.stringify({
           collection: collection.name,
           id: String(document.id),
-          revision: document.revision,
           locale,
           writableFields: visible.filter((name) =>
             mayWriteField(collection, name, context.actor, locale),
@@ -488,11 +501,10 @@ function updateDocumentTool(context: ToolContext): AgentTool {
     name: "update_document",
     label: "Save changes to a document",
     description:
-      "Writes a patch to one existing document and saves it. Only the named fields change. Requires expectedRevision from get_document. Rich-text fields take Markdown.",
+      "Writes a patch to one existing document and saves it. Only the named fields change. The document has to have been read in this conversation first (get_document, get_current_page or find_documents); the save is refused if somebody changed it since. Rich-text fields take Markdown.",
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       id: Type.String({ minLength: 1, maxLength: 200 }),
-      expectedRevision: Type.Integer({ minimum: 1 }),
       locale: Type.Optional(Type.String({ maxLength: 20 })),
       data: Type.Record(Type.String(), Type.Any()),
     }),
@@ -501,7 +513,8 @@ function updateDocumentTool(context: ToolContext): AgentTool {
       const input = parameters as {
         collection: string;
         id: string;
-        expectedRevision: number;
+        /** Not offered to the model; honoured from a caller that has one. */
+        expectedRevision?: number;
         locale?: string;
         data: JsonObject;
       };
@@ -513,6 +526,8 @@ function updateDocumentTool(context: ToolContext): AgentTool {
       const locale = localeFor(context.config, context.page, input.locale);
       assertFormIsClean(context, collection, input.id);
       const data = shapePatch(collection, input.data, context.actor, locale);
+      const key = documentKey(collection, input.id);
+      const expectedRevision = revisionFor(context, key, input.expectedRevision); // prettier-ignore
 
       const updated = await collectionApi(context, collection).update({
         id: input.id,
@@ -521,7 +536,7 @@ function updateDocumentTool(context: ToolContext): AgentTool {
         source: "ai",
         locale,
         runId: context.runId,
-        expectedRevision: input.expectedRevision,
+        expectedRevision,
         idempotencyKey: `${context.runId}:${toolCallId}`,
       });
 
@@ -541,6 +556,8 @@ function updateDocumentTool(context: ToolContext): AgentTool {
         revision: Number(updated.revision ?? 0),
       };
       context.onMutation(target, fields);
+      // The model's next change to the same record builds on this one.
+      remember(context, key, updated.revision);
 
       return toolText(
         JSON.stringify({
@@ -548,7 +565,6 @@ function updateDocumentTool(context: ToolContext): AgentTool {
           collection: collection.name,
           id: String(updated.id),
           locale,
-          revision: updated.revision,
           fields,
         }),
       );
@@ -695,7 +711,7 @@ function getGlobalTool(context: ToolContext): AgentTool {
   return {
     name: "get_global",
     label: "Read a global",
-    description: "Reads one singleton in one locale, with its revision.",
+    description: "Reads one singleton (site-wide settings) in one locale.",
     parameters: Type.Object({
       global: Type.String({ minLength: 1, maxLength: 120 }),
       locale: Type.Optional(Type.String({ maxLength: 20 })),
@@ -709,12 +725,12 @@ function getGlobalTool(context: ToolContext): AgentTool {
         forDisplay: true,
       });
       const visible = readableFields(global, context.actor, locale);
+      remember(context, globalKey(global), document.revision);
 
       return toolText(
         JSON.stringify({
           global: global.name,
           locale,
-          revision: document.revision,
           writableFields: visible.filter((name) =>
             mayWriteField(global, name, context.actor, locale),
           ),
@@ -735,10 +751,9 @@ function updateGlobalTool(context: ToolContext): AgentTool {
     name: "update_global",
     label: "Save changes to a global",
     description:
-      "Writes a patch to one singleton and saves it. Requires expectedRevision from get_global.",
+      "Writes a patch to one singleton and saves it. Read it with get_global first; the save is refused if somebody changed it since.",
     parameters: Type.Object({
       global: Type.String({ minLength: 1, maxLength: 120 }),
-      expectedRevision: Type.Integer({ minimum: 1 }),
       locale: Type.Optional(Type.String({ maxLength: 20 })),
       data: Type.Record(Type.String(), Type.Any()),
     }),
@@ -746,7 +761,8 @@ function updateGlobalTool(context: ToolContext): AgentTool {
       context.spend();
       const input = parameters as {
         global: string;
-        expectedRevision: number;
+        /** Not offered to the model; honoured from a caller that has one. */
+        expectedRevision?: number;
         locale?: string;
         data: JsonObject;
       };
@@ -754,6 +770,8 @@ function updateGlobalTool(context: ToolContext): AgentTool {
       const locale = localeFor(context.config, context.page, input.locale);
       assertFormIsClean(context, global, null);
       const data = shapePatch(global, input.data, context.actor, locale);
+      const key = globalKey(global);
+      const expectedRevision = revisionFor(context, key, input.expectedRevision); // prettier-ignore
 
       const updated = await globalApi(context, global).update({
         data,
@@ -761,7 +779,7 @@ function updateGlobalTool(context: ToolContext): AgentTool {
         source: "ai",
         locale,
         runId: context.runId,
-        expectedRevision: input.expectedRevision,
+        expectedRevision,
         idempotencyKey: `${context.runId}:${toolCallId}`,
       });
 
@@ -784,12 +802,13 @@ function updateGlobalTool(context: ToolContext): AgentTool {
         fields,
       );
 
+      remember(context, key, updated.revision);
+
       return toolText(
         JSON.stringify({
           saved: true,
           global: global.name,
           locale,
-          revision: updated.revision,
           fields,
         }),
       );
@@ -986,7 +1005,6 @@ function createPlanTool(context: ToolContext): AgentTool {
         Type.Object({
           collection: Type.String({ minLength: 1, maxLength: 120 }),
           id: Type.String({ minLength: 1, maxLength: 200 }),
-          expectedRevision: Type.Integer({ minimum: 1 }),
           locale: Type.Optional(Type.String({ maxLength: 20 })),
           data: Type.Record(Type.String(), Type.Any()),
         }),
@@ -1000,7 +1018,7 @@ function createPlanTool(context: ToolContext): AgentTool {
         changes: {
           collection: string;
           id: string;
-          expectedRevision: number;
+          expectedRevision?: number;
           locale?: string;
           data: JsonObject;
         }[];
@@ -1029,7 +1047,12 @@ function createPlanTool(context: ToolContext): AgentTool {
           collection: collection.name,
           id: String(document.id),
           locale,
-          expectedRevision: change.expectedRevision,
+          // What the model read if it read it; otherwise what is there now,
+          // which is what the editor approves against.
+          expectedRevision:
+            change.expectedRevision ??
+            context.revisions?.get(documentKey(collection, document.id)) ??
+            Number(document.revision ?? 1),
           data,
           label: recordTitle(document, titleField(collection)),
           fields: Object.keys(data),
@@ -1182,6 +1205,48 @@ function shapePatch(
     result[name] = shapeFieldValue(collection, name, value as JsonValue);
   }
   return result;
+}
+
+function documentKey(
+  collection: ResolvedCollection,
+  id: JsonValue | undefined,
+): string {
+  // prettier-ignore
+  return `document:${collection.name}:${String(id)}`;
+}
+
+function globalKey(global: ResolvedCollection): string {
+  return `global:${global.name}`;
+}
+
+function remember(
+  context: ToolContext,
+  key: string,
+  revision: JsonValue | undefined,
+): void {
+  // prettier-ignore
+  const value = Number(revision);
+  if (Number.isInteger(value) && value > 0) context.revisions?.set(key, value);
+}
+
+/**
+ * The revision a write is made against: the one a caller passed, or the one
+ * this run read. A record the run never read is refused rather than written
+ * blind — the rule the prompt asks for, enforced where it cannot be argued
+ * with.
+ */
+function revisionFor(
+  context: ToolContext,
+  key: string,
+  given: number | undefined,
+): number {
+  // prettier-ignore
+  if (given !== undefined) return given;
+  const known = context.revisions?.get(key);
+  if (known !== undefined) return known;
+  throw CmsError.validation(
+    "Read this record first (get_document, or get_current_page for the one on screen); a change is only ever made to a version you have read.",
+  );
 }
 
 function readableFields(

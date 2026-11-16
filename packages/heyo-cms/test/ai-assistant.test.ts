@@ -1,5 +1,12 @@
 import { Database } from "bun:sqlite";
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 
 import { expandRoles, permits } from "../src/access/permissions";
 import { defineCollection, defineGlobal, heyoCms, systemActor } from "../src/config"; // prettier-ignore
@@ -15,6 +22,7 @@ import type { AiAssistantEvent, AiPageContext } from "../src/types/ai";
 import type { CmsEvent } from "../src/types/events";
 import type { CmsInstance } from "../src/types/instance";
 import type { JsonObject } from "../src/types/json";
+import { useRealAgent, useScriptedAgent } from "./support/agent-runtime";
 
 /**
  * The panel-wide assistant.
@@ -252,7 +260,10 @@ class FakeAgent {
   }
 }
 
-mock.module("@mariozechner/pi-agent-core", () => ({ Agent: FakeAgent }));
+// Scripted for this file only; `ai-assistant-loop.test.ts` drives pi's real
+// loop in the same process (see `support/agent-runtime.ts`).
+beforeAll(() => useScriptedAgent(FakeAgent as never));
+afterAll(() => useRealAgent());
 
 // ---------------------------------------------------------------------------
 // Fixture

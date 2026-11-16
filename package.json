@@ -10,6 +10,7 @@
   "scripts": {
     "build": "bun run --filter @heyo-sh/heyo-cms build && bun run --filter @heyo-sh/heyo-cms-admin build && bun run --filter @heyo-sh/create-heyo-cms build",
     "test": "bun test",
+    "test:ai-live": "HEYO_CMS_LIVE_AI=1 bun test packages/heyo-cms/test/ai-assistant.live.test.ts",
     "example": "bun scripts/examples.ts",
     "templates": "bun scripts/templates.ts",
     "docs:dev": "bun run --cwd website dev",

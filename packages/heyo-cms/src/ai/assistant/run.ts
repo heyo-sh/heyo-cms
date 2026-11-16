@@ -59,6 +59,11 @@ import {
  * leaves the editor with an error after a minute and a half of waiting.
  */
 const wrapUpAt = 0.75;
+/**
+ * How many of the slowest step so far the answer is allowed to take. The
+ * answer is the longest thing a model writes in a run, so it gets two.
+ */
+const answerAllowance = 2;
 
 /** What a tool says, and what the model is told, once the budget is spent. */
 const wrapUpInstruction =
@@ -132,6 +137,8 @@ export async function* runAssistant(
   let failure: unknown;
   let turns = 0;
   let timedOut = false;
+  /** Stopped because it would not stop calling tools after the wrap-up. */
+  let overBudget = false;
   /** Whether the editor has been given an answer yet. */
   let answered = false;
   /**
@@ -141,6 +148,16 @@ export async function* runAssistant(
    * the same message as its last tool call and then had nothing to add.
    */
   let narration = "";
+  /** The longest a single model step has taken so far in this run. */
+  let slowestStep = 0;
+  let stepStarted = started;
+  /**
+   * The text of the message being streamed, while it can still turn out to
+   * be the answer (no tool call in it yet). Kept only so a run cut off by the
+   * deadline in the middle of its answer shows what it had written.
+   */
+  let draft = "";
+  let draftIsAnswer = false;
 
   /**
    * Whether the run has to stop calling tools and answer.
@@ -151,10 +168,18 @@ export async function* runAssistant(
    * wrap-up: the tools refuse, the model is told to answer from what it has,
    * and only a model that ignores that is stopped outright.
    */
-  const wrappingUp = () =>
-    turns >= maxTurns ||
-    spent >= maxToolCalls ||
-    Date.now() - started >= timeoutMs * wrapUpAt;
+  const wrappingUp = () => {
+    if (turns >= maxTurns || spent >= maxToolCalls) return true;
+    const elapsed = Date.now() - started;
+    // Time is measured against the model actually in use, not only as a
+    // share of the budget: the answer is usually the longest step, and a
+    // model that took eight seconds to pick a tool will not write six
+    // summaries in the last quarter of a twenty-second budget.
+    return (
+      elapsed >= timeoutMs * wrapUpAt ||
+      elapsed + slowestStep * answerAllowance >= timeoutMs
+    );
+  };
 
   // One controller for the two things that end a run early: the client
   // closing the socket, and the configured timeout. Both have to reach the
@@ -223,8 +248,19 @@ export async function* runAssistant(
       // tools would refuse anyway, but a model that has been told it is out
       // of budget answers on this turn instead of spending it on a call that
       // fails. Appended to what the model reads, never to the transcript.
-      transformContext: async (messages: AgentMessage[]) =>
-        wrappingUp()
+      transformContext: async (
+        messages: AgentMessage[],
+        signal?: AbortSignal,
+      ) => {
+        // pi goes on to the next model call after an abort, with the
+        // aborted signal; refusing here means that call is never made.
+        if (controller.signal.aborted || signal?.aborted) {
+          throw new CmsError("The request was cancelled.", {
+            status: 499,
+            code: "ai_aborted",
+          });
+        }
+        return wrappingUp()
           ? [
               ...messages,
               {
@@ -233,7 +269,8 @@ export async function* runAssistant(
                 timestamp: Date.now(),
               } as AgentMessage,
             ]
-          : messages,
+          : messages;
+      },
       // Never parallel. Two tool calls the model issued together could be two
       // writes to the same document, and letting them race would make the
       // revision check decide which of the model's own intentions survives.
@@ -245,9 +282,25 @@ export async function* runAssistant(
       switch (event.type) {
         case "turn_start": {
           turns += 1;
+          stepStarted = Date.now();
           // One turn past the budget is the wrap-up answer; a model that
           // spends that on another tool call too is not going to stop.
-          if (turns > maxTurns + 1) agent?.abort();
+          if (turns > maxTurns + 1) {
+            overBudget = true;
+            agent?.abort();
+          }
+          return;
+        }
+        case "message_start": {
+          if (event.message.role !== "assistant") return;
+          draft = "";
+          draftIsAnswer = true;
+          return;
+        }
+        case "message_update": {
+          const update = event.assistantMessageEvent;
+          if (update.type === "toolcall_start") draftIsAnswer = false;
+          if (update.type === "text_delta") draft += update.delta;
           return;
         }
         case "message_end": {
@@ -257,6 +310,16 @@ export async function* runAssistant(
           // the second is a raw record — and neither may reach the screen.
           if (event.message.role !== "assistant") return;
           usage = addUsage(usage, messageUsage(event.message));
+          slowestStep = Math.max(slowestStep, Date.now() - stepStarted);
+          const ended = (event.message as { stopReason?: string }).stopReason;
+          // An abort closes the message too; what it had written by then is
+          // kept for the failure path, everything else starts afresh.
+          if (ended === "aborted" && !hasToolCalls(event.message)) {
+            draft = assistantText(event.message).trim() || draft;
+          } else {
+            draft = "";
+            draftIsAnswer = false;
+          }
 
           // Only the message that ends the run is the answer. A message
           // that goes on to call a tool is the model talking to itself on
@@ -336,6 +399,15 @@ export async function* runAssistant(
     for await (const event of queue) yield event;
     await settled;
 
+    // Said as what it is. Aborting the agent ends the run quietly, as if the
+    // model had stopped, which would have been reported as a success with
+    // nothing in it.
+    if (failure === undefined && overBudget) {
+      failure = new CmsError(
+        `The assistant used its ${maxTurns} steps without finishing. Try a narrower request, or split it in two.`,
+        { status: 429, code: "ai_budget_exhausted" },
+      );
+    }
     const errorMessage = agent.state.errorMessage;
     if (failure === undefined && errorMessage)
       failure = new Error(errorMessage);
@@ -389,6 +461,16 @@ export async function* runAssistant(
     await safely(() =>
       options.record("ai.agent.failed", metadata, actor, error),
     );
+    // The deadline landed while the answer was being written. What exists
+    // of it is shown, marked, next to the error — rather than throwing away
+    // the one part of the run the editor was waiting for.
+    const partial = draft.trim();
+    if (timedOut && !answered && draftIsAnswer && partial.length > 0) {
+      yield {
+        type: "text-delta",
+        text: `${partial}…\n\n[Ran out of time — this answer is incomplete.]`,
+      };
+    }
     yield { type: "error", code: error.code, message: error.message };
     return;
   }

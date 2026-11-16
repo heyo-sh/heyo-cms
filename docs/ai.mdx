@@ -121,11 +121,20 @@ ranks a search by the words of the query, and can return a few named fields for
 every result, so "which articles have no SEO description" is one call rather
 than one per article.
 
+The model never sees a revision. Every read records the version it saw on
+the server, and a write is made against that version: it fails with a
+conflict if somebody saved in the meantime, and a record the agent has not
+read in the run cannot be written at all.
+
 The limits wind a run down rather than cutting it off. When `maxTurns` or
-`maxToolCalls` is spent, or three quarters of `timeoutMs` have passed, the
-tools refuse and the model is told to answer from what it has read; only a
-model that ignores that is aborted, and a run that reaches `timeoutMs` ends
-with `ai_timeout`.
+`maxToolCalls` is spent, or the time left would not cover an answer — three
+quarters of `timeoutMs` have passed, or what remains is less than twice the
+slowest step so far — the tools refuse and the model is told to answer from
+what it has read. A model that ignores
+that is stopped with `ai_budget_exhausted`; a run that reaches `timeoutMs` ends
+with `ai_timeout`, showing whatever part of the answer was already written,
+marked as incomplete. A client that disconnects aborts the provider call, and
+the run is still recorded as `ai.agent.failed` with what it had spent.
 
 `thinking` is how much a reasoning model reasons before each step: `off`,
 `minimal`, `low`, `medium` or `high`. By default it is `off`, or `low` for a

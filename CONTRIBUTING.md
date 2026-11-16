@@ -38,6 +38,19 @@ production bundles. Both also run in CI; they are separate from `quality`.
 Generated examples are not workspaces and do not change the root lockfile.
 Move them aside before testing template changes so they are regenerated.
 
+The AI assistant is tested three ways. `bun test` drives pi's real agent
+loop with a scripted model (`test/ai-assistant-loop.test.ts`, and
+`assistant-e2e.dom.test.tsx` through the panel) — no network, no key. Against
+a real model, opt-in and never in CI:
+
+```bash
+OPENAI_API_KEY=sk-… bun run test:ai-live
+```
+
+`HEYO_CMS_LIVE_AI_MODEL` picks the model (default `gpt-5-nano`) and
+`HEYO_CMS_LIVE_AI_REPEAT=3` runs every scenario three times; run it after
+touching the assistant's prompt, tools or run loop.
+
 After changing template configuration, run `bun run templates` and review the
 migration diff. `bun run templates --check` detects drift; generated migration
 bytes must not be hand-formatted. Build the docs with `bun run docs:build`.
