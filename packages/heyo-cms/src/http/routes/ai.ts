@@ -393,6 +393,8 @@ function assistantRoutes(cms: CmsInstance): RouteRecord[] {
  * event rather than as a non-200 response, because by the time the body is
  * being produced the status line has already been sent.
  */
+const heartbeatMs = 15_000;
+
 function eventStream(
   start: (signal: AbortSignal) => AsyncIterable<AiAssistantEvent>,
   request: Request,
@@ -417,16 +419,25 @@ function eventStream(
       // controller into something that throws — and the first place that
       // would bite is the error handler below, which would then throw while
       // reporting the error it was called for.
-      const send = (event: AiAssistantEvent) => {
+      const write = (frame: string) => {
         if (closed) return;
         try {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
-          );
+          controller.enqueue(encoder.encode(frame));
         } catch {
           closed = true;
         }
       };
+      const send = (event: AiAssistantEvent) =>
+        write(`data: ${JSON.stringify(event)}\n\n`);
+
+      // A comment frame now and then. The answer arrives whole, at the end,
+      // and a model reasoning through one long step can leave the socket
+      // silent for longer than a proxy's idle timeout (Cloudflare's is 100
+      // seconds); a client ignores a frame without `data:`.
+      const heartbeat = setInterval(
+        () => write(": keep-alive\n\n"),
+        heartbeatMs,
+      );
 
       try {
         for (;;) {
@@ -447,6 +458,7 @@ function eventStream(
           }
         }
       } finally {
+        clearInterval(heartbeat);
         request.signal.removeEventListener("abort", stop);
         closed = true;
         try {

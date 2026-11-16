@@ -5,7 +5,7 @@ import { expandRoles, permits } from "../src/access/permissions";
 import { defineCollection, defineGlobal, heyoCms, systemActor } from "../src/config"; // prettier-ignore
 import { sqlite } from "../src/db/sqlite";
 import { richTextToMarkdown } from "../src/editor/index";
-import { list, media, richText, select, text } from "../src/fields";
+import { list, media, relation, richText, select, text } from "../src/fields";
 import { describeCmsFor } from "../src/ai/assistant/schema";
 import { memory } from "../src/storage/local";
 import { emptySnapshot } from "../src/schema/snapshot";
@@ -41,6 +41,12 @@ interface ScriptedCall {
 interface Script {
   calls: ScriptedCall[];
   reply?: string;
+  /**
+   * What the model says in the message that calls the tools, before them:
+   * "let me look that up". Real models do this all the time; it is the
+   * working, not the answer.
+   */
+  preamble?: string;
   /** Thrown from `prompt()`, the way a provider failure surfaces. */
   fail?: string;
   /** Runs until something aborts it, like a model that will not stop. */
@@ -49,8 +55,12 @@ interface Script {
 
 let script: Script = { calls: [] };
 /** What the double was constructed with, so a test can read the prompt. */
-let constructed: { systemPrompt: string; tools: { name: string }[] } | null =
-  null;
+let constructed: {
+  systemPrompt: string;
+  tools: { name: string }[];
+  thinkingLevel?: string;
+  transformContext?: (messages: unknown[]) => Promise<unknown[]>;
+} | null = null;
 /** Tool failures, recorded the way the real loop reports them to the model. */
 let toolErrors: { tool: string; message: string }[] = [];
 /** Whether anything actually told the agent to stop. */
@@ -72,16 +82,26 @@ class FakeAgent {
     }[];
     messages: unknown[];
     errorMessage?: string;
+    thinkingLevel?: string;
   };
 
   private listeners: ((event: unknown) => void)[] = [];
   private aborted = false;
 
-  constructor(options: { initialState: FakeAgent["state"] }) {
+  constructor(options: {
+    initialState: FakeAgent["state"];
+    transformContext?: (messages: unknown[]) => Promise<unknown[]>;
+  }) {
     this.state = options.initialState;
     constructed = {
       systemPrompt: this.state.systemPrompt,
       tools: this.state.tools,
+      ...(this.state.thinkingLevel === undefined
+        ? {}
+        : { thinkingLevel: this.state.thinkingLevel }),
+      ...(options.transformContext === undefined
+        ? {}
+        : { transformContext: options.transformContext }),
     };
   }
 
@@ -102,8 +122,16 @@ class FakeAgent {
     for (const listener of this.listeners) listener(event);
   }
 
-  async prompt(): Promise<void> {
+  /**
+   * The event sequence pi's loop really produces, including the parts the
+   * run must not show: the editor's own prompt and every tool result pass
+   * through `message_start`/`message_end` exactly like the model's messages.
+   */
+  async prompt(text = ""): Promise<void> {
     this.emit({ type: "turn_start" });
+    const user = { role: "user", content: [{ type: "text", text }] };
+    this.emit({ type: "message_start", message: user });
+    this.emit({ type: "message_end", message: user });
     if (script.fail) {
       this.state.errorMessage = script.fail;
       return;
@@ -125,11 +153,41 @@ class FakeAgent {
       return;
     }
 
+    if (script.calls.length > 0) {
+      const asking = {
+        role: "assistant",
+        content: [
+          ...(script.preamble ? [{ type: "text", text: script.preamble }] : []), // prettier-ignore
+          ...script.calls.map((call, index) => ({
+            type: "toolCall",
+            id: `call_${index}`,
+            name: call.tool,
+            arguments: call.args,
+          })),
+        ],
+        stopReason: "toolUse",
+      };
+      this.emit({ type: "message_start", message: asking });
+      if (script.preamble) {
+        this.emit({
+          type: "message_update",
+          message: asking,
+          assistantMessageEvent: { type: "text_delta", delta: script.preamble },
+        });
+      }
+      this.emit({ type: "message_end", message: asking });
+    }
+
     for (const [index, call] of script.calls.entries()) {
       if (this.aborted) return;
       const tool = this.state.tools.find((entry) => entry.name === call.tool);
       if (!tool) throw new Error(`the CMS registered no tool "${call.tool}"`);
       const id = `call_${index}`;
+      const toolResult = (content: unknown) => {
+        const message = { role: "toolResult", toolCallId: id, content };
+        this.emit({ type: "message_start", message });
+        this.emit({ type: "message_end", message });
+      };
       this.emit({
         type: "tool_execution_start",
         toolCallId: id,
@@ -145,6 +203,7 @@ class FakeAgent {
           result,
           isError: false,
         });
+        toolResult(result.content);
       } catch (error) {
         // The real loop turns a thrown tool into an error result the model
         // reads and may recover from; it does not end the run.
@@ -159,12 +218,21 @@ class FakeAgent {
           result: null,
           isError: true,
         });
+        toolResult([
+          {
+            type: "text",
+            text: error instanceof Error ? error.message : String(error),
+          },
+        ]);
       }
     }
 
+    if (script.calls.length > 0) this.emit({ type: "turn_start" });
+    const reply = script.reply ?? "Done.";
     const message = {
       role: "assistant",
-      content: [{ type: "text", text: script.reply ?? "Done." }],
+      content: reply.length === 0 ? [] : [{ type: "text", text: reply }],
+      stopReason: "stop",
       usage: {
         input: 100,
         output: 20,
@@ -173,6 +241,13 @@ class FakeAgent {
       },
     };
     this.emit({ type: "message_start", message });
+    if (reply.length > 0) {
+      this.emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: { type: "text_delta", delta: reply },
+      });
+    }
     this.emit({ type: "message_end", message });
   }
 }
@@ -232,6 +307,7 @@ const collections = () => ({
         access: { read: ({ actor }) => permits(actor, "posts:secrets") },
       }),
       cover: media({}),
+      related: relation("posts", { label: "Related post" }),
     },
   }),
 });
@@ -1309,6 +1385,9 @@ describe("limits and failures", () => {
     expect(aborted).toBe(true);
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(eventsOfType(streamed, "error")).toHaveLength(1);
+    // Named for what happened. "The request was cancelled" told an editor
+    // who had been waiting a minute and a half that they had cancelled it.
+    expect(eventsOfType(streamed, "error")[0]?.code).toBe("ai_timeout");
     await cms.close();
   });
 
@@ -1406,6 +1485,240 @@ describe("limits and failures", () => {
       // prettier-ignore
       expect(names.some((name) => name.includes(forbidden))).toBe(false);
     }
+    await cms.close();
+  });
+});
+
+/**
+ * Calls one tool the way the model would, after a real (empty) turn built
+ * the tools with the real context.
+ */
+async function callTool(
+  cms: CmsInstance,
+  name: string,
+  args: JsonObject,
+  options: { actor?: Actor; pageContext?: AiPageContext } = {},
+): Promise<string> {
+  script = { calls: [] };
+  await run(cms, {
+    message: "x",
+    actor: options.actor ?? actorWith("editor"),
+    ...(options.pageContext ? { pageContext: options.pageContext } : {}),
+  });
+  const tool = constructed?.tools.find((entry) => entry.name === name) as unknown as { execute: (id: string, args: unknown) => Promise<{ content: { text: string }[] }> }; // prettier-ignore
+  return (await tool.execute("t", args)).content[0]?.text ?? "";
+}
+
+function answerOf(events: AiAssistantEvent[]): string {
+  return eventsOfType(events, "text-delta")
+    .map((event) => event.text)
+    .join("");
+}
+
+describe("what the editor is shown", () => {
+  test("the answer, not the prompt, the tool results or the narration", async () => {
+    const { cms } = await setup();
+    await cms.api.posts.create({
+      data: { title: "Uploads explained", internalNotes: "do not show" },
+      actor: systemActor(),
+    });
+    script = {
+      preamble: "Let me look that up first.",
+      calls: [
+        { tool: "describe_cms", args: {} },
+        { tool: "find_documents", args: { collection: "posts" } },
+      ],
+      reply: "There is one post: Uploads explained.",
+    };
+
+    const streamed = await run(cms, {
+      message: "which posts do we have?",
+      actor: actorWith("editor"),
+    });
+
+    // Every one of these used to reach the screen: the editor's own message
+    // echoed back (pi closes the prompt with `message_end` too), the schema
+    // and the search results as raw JSON (so are tool results), and the
+    // model's running commentary before each call.
+    expect(answerOf(streamed)).toBe("There is one post: Uploads explained.");
+    expect(eventsOfType(streamed, "error")).toHaveLength(0);
+    await cms.close();
+  });
+
+  test("a run that wrapped up inside its last tool call still answers", async () => {
+    const { cms } = await setup();
+    script = {
+      preamble: "I have read the schema; there are posts and settings.",
+      calls: [{ tool: "describe_cms", args: {} }],
+      reply: "",
+    };
+    const streamed = await run(cms, { message: "what is here?", actor: actorWith("editor") }); // prettier-ignore
+    expect(answerOf(streamed)).toBe(
+      "I have read the schema; there are posts and settings.",
+    );
+    await cms.close();
+  });
+
+  test("a run with nothing to say says so rather than leaving a blank", async () => {
+    const { cms } = await setup();
+    script = { calls: [{ tool: "describe_cms", args: {} }], reply: "" };
+    const streamed = await run(cms, { message: "hm", actor: actorWith("editor") }); // prettier-ignore
+    expect(answerOf(streamed).length).toBeGreaterThan(0);
+    expect(answerOf(streamed)).not.toContain("{");
+    await cms.close();
+  });
+
+  test("a spent budget winds the run down to an answer instead of cutting it off", async () => {
+    const { cms } = await setup({ maxToolCalls: 2 });
+    script = {
+      calls: Array.from({ length: 5 }, () => ({ tool: "describe_cms", args: {} })), // prettier-ignore
+      reply: "Here is what I found so far.",
+    };
+    const streamed = await run(cms, { message: "loop", actor: actorWith("editor") }); // prettier-ignore
+
+    expect(toolErrors).toHaveLength(3);
+    expect(toolErrors[0]?.message).toMatch(/Answer the editor now/);
+    expect(eventsOfType(streamed, "error")).toHaveLength(0);
+    expect(answerOf(streamed)).toBe("Here is what I found so far.");
+
+    // And the model is told, not only refused: the next request it makes
+    // carries the instruction, so it answers instead of trying again.
+    const sent = await constructed?.transformContext?.([]);
+    expect(JSON.stringify(sent)).toContain("Answer the editor now");
+    await cms.close();
+  });
+
+  test("with budget left, the model's context is passed through untouched", async () => {
+    const { cms } = await setup();
+    script = { calls: [], reply: "Hi." };
+    await run(cms, { message: "hi", actor: actorWith("editor") });
+    // The run is over, but nothing was spent: no turn limit, no tool limit.
+    // (The time share is measured from the start of a run long since done,
+    // so check the shape on a fresh, unspent run instead.)
+    const messages = [{ role: "user", content: "hi" }];
+    const passed = await constructed?.transformContext?.(messages);
+    expect(passed === messages || JSON.stringify(passed) === JSON.stringify(messages)).toBe(true); // prettier-ignore
+    await cms.close();
+  });
+
+  test("a reasoning model that cannot switch thinking off thinks as little as it can", async () => {
+    const { cms } = await setup({ model: { provider: "openai", model: "gpt-5-nano" } }); // prettier-ignore
+    script = { calls: [] };
+    await run(cms, { message: "hi", actor: actorWith("editor") });
+    // GPT-5 reads an absent setting as `medium`: a long silent wait before
+    // every tool call.
+    expect(constructed?.thinkingLevel).toBe("low");
+    await cms.close();
+
+    const plain = await setup();
+    await run(plain.cms, { message: "hi", actor: actorWith("editor") });
+    expect(constructed?.thinkingLevel).toBe("off");
+    await plain.cms.close();
+
+    const configured = await setup({ thinking: "medium" });
+    await run(configured.cms, { message: "hi", actor: actorWith("editor") });
+    expect(constructed?.thinkingLevel).toBe("medium");
+    await configured.cms.close();
+  });
+});
+
+describe("what the model reads", () => {
+  test("a search counts the whole collection, not the page", async () => {
+    const { cms } = await setup();
+    for (const title of ["One", "Two", "Three"]) {
+      await cms.api.posts.create({ data: { title }, actor: systemActor() });
+    }
+    const result = JSON.parse(
+      await callTool(cms, "find_documents", { collection: "posts", limit: 1 }),
+    ) as { total: number; returned: number; hasMore: boolean };
+    expect(result).toMatchObject({ total: 3, returned: 1, hasMore: true });
+    await cms.close();
+  });
+
+  test("a search finds a title by its words, not only by the exact phrase", async () => {
+    const { cms } = await setup();
+    await cms.api.posts.create({
+      data: { title: "What happens when a payment fails?" },
+      actor: systemActor(),
+    });
+    await cms.api.posts.create({ data: { title: "Invite your team" }, actor: systemActor() }); // prettier-ignore
+    const result = JSON.parse(
+      await callTool(cms, "find_documents", {
+        collection: "posts",
+        query: "failed payments",
+      }),
+    ) as { results: { title: string }[] };
+    expect(result.results.map((entry) => entry.title)).toEqual([
+      "What happens when a payment fails?",
+    ]);
+    await cms.close();
+  });
+
+  test("a search can hand back chosen fields, so a check across records is one call", async () => {
+    const { cms } = await setup();
+    await cms.api.posts.create({ data: { title: "With", seoTitle: "Set" }, actor: systemActor() }); // prettier-ignore
+    await cms.api.posts.create({ data: { title: "Without" }, actor: systemActor() }); // prettier-ignore
+    const result = JSON.parse(
+      await callTool(cms, "find_documents", {
+        collection: "posts",
+        fields: ["seoTitle"],
+      }),
+    ) as { results: { title: string; fields: Record<string, unknown> }[] };
+    const byTitle = Object.fromEntries(
+      result.results.map((entry) => [entry.title, entry.fields.seoTitle]),
+    );
+    expect(byTitle).toEqual({ With: "Set", Without: null });
+
+    // And a field this account cannot read is not a way to read it.
+    script = { calls: [] };
+    const refused = await callTool(cms, "find_documents", {
+      collection: "posts",
+      fields: ["internalNotes"],
+    }).catch((error: Error) => error.message);
+    expect(refused).toMatch(/not a field of posts/);
+    await cms.close();
+  });
+
+  test("an untranslated field says so, instead of passing the default language off as the translation", async () => {
+    const { cms } = await setup();
+    const created = await cms.api.posts.create({
+      data: { title: "Only in English" },
+      actor: systemActor(),
+      locale: "en",
+    });
+
+    const found = JSON.parse(
+      await callTool(cms, "find_documents", { collection: "posts", locale: "pl" }), // prettier-ignore
+    ) as { results: { untranslated?: string[] }[] };
+    expect(found.results[0]?.untranslated).toContain("title");
+
+    const read = JSON.parse(
+      await callTool(cms, "get_document", {
+        collection: "posts",
+        id: String(created?.id),
+        locale: "pl",
+      }),
+    ) as { record: string };
+    expect(read.record).toMatch(
+      /### title \([^)]*NOT TRANSLATED[^)]*en text\)/,
+    );
+    await cms.close();
+  });
+
+  test("a relation is named by its title, and empty fields are one line, not a section each", async () => {
+    const { cms } = await setup();
+    const target = await cms.api.posts.create({ data: { title: "The other post" }, actor: systemActor() }); // prettier-ignore
+    const created = await cms.api.posts.create({
+      data: { title: "Pointing", related: String(target?.id) },
+      actor: systemActor(),
+    });
+    const read = JSON.parse(
+      await callTool(cms, "get_document", { collection: "posts", id: String(created?.id) }), // prettier-ignore
+    ) as { record: string };
+
+    expect(read.record).toContain(`"The other post" [${String(target?.id)}]`);
+    expect(read.record).toMatch(/Empty fields: .*seoTitle/);
+    expect(read.record).not.toContain("(empty)");
     await cms.close();
   });
 });

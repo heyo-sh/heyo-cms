@@ -1194,6 +1194,16 @@ function validateAi(
       );
     }
   }
+  const thinking = assistant?.thinking;
+  if (
+    thinking !== undefined &&
+    !["off", "minimal", "low", "medium", "high"].includes(thinking)
+  ) {
+    throw new CmsConfigError(
+      "ai.assistant.thinking",
+      'must be one of "off", "minimal", "low", "medium" or "high"',
+    );
+  }
   if (ai.storage && ai.storage.secret.length < 16) {
     throw new CmsConfigError(
       "ai.storage.secret",

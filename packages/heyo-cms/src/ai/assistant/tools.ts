@@ -26,14 +26,21 @@ import {
 } from "./schema";
 import { toolText, type AgentTool } from "./runtime";
 import {
+  fallbackFields,
+  fieldExcerpts,
   recordSummary,
   recordTitle,
   renderRecord,
   shapeFieldValue,
+  type RelationTitle,
 } from "./values";
 
 /** A find never answers with more than this, whatever the model asked for. */
 const maxSearchResults = 20;
+/** How many matches a search reads before ranking them. */
+const maxSearchCandidates = 50;
+/** Fields a search may hand back per result. */
+const maxListedFields = 5;
 /** The audit trail is paged; one tool call sees one small page of it. */
 const maxActivityResults = 25;
 
@@ -172,6 +179,7 @@ function currentPageTool(context: ToolContext): AgentTool {
           context,
           page.collection,
           page.locale,
+          { forDisplay: true },
         );
         return answer({
           global: page.collection.name,
@@ -180,6 +188,7 @@ function currentPageTool(context: ToolContext): AgentTool {
             page.collection,
             document,
             readableFields(page.collection, context.actor, page.locale),
+            relationTitle(context),
           ),
         });
       }
@@ -203,6 +212,7 @@ function currentPageTool(context: ToolContext): AgentTool {
         page.collection,
         page.documentId,
         page.locale,
+        { forDisplay: true },
       );
       return answer({
         documentId: String(document.id),
@@ -211,6 +221,7 @@ function currentPageTool(context: ToolContext): AgentTool {
           page.collection,
           document,
           readableFields(page.collection, context.actor, page.locale),
+          relationTitle(context),
         ),
       });
     },
@@ -299,13 +310,18 @@ function findDocumentsTool(context: ToolContext): AgentTool {
   return {
     name: "find_documents",
     label: "Search documents",
-    description:
-      "Finds documents in one collection. Returns ids, titles and a one-line gist — never the full record. Read one with get_document once you know which.",
+    description: `Finds documents in one collection, most recently updated first. Without a query it lists the collection (use offset to page), with one it matches any of its words in the text fields. Returns ids, titles, a one-line gist, the total count, and which fields have no translation in the locale — never the full record. To check or compare a few fields across many records (which ones lack an SEO description, which are drafts), name them in fields and they come back, shortened, for every result: one call instead of a read per record. Read one in full with get_document. At most ${maxSearchResults} per call.`,
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       query: Type.Optional(Type.String({ maxLength: 200 })),
       locale: Type.Optional(Type.String({ maxLength: 20 })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: maxSearchResults })), // prettier-ignore
+      offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 10_000 })),
+      fields: Type.Optional(
+        Type.Array(Type.String({ minLength: 1, maxLength: 120 }), {
+          maxItems: maxListedFields,
+        }),
+      ),
       includeTrashed: Type.Optional(Type.Boolean()),
     }),
     async execute(_id, parameters) {
@@ -315,6 +331,8 @@ function findDocumentsTool(context: ToolContext): AgentTool {
         query?: string;
         locale?: string;
         limit?: number;
+        offset?: number;
+        fields?: string[];
         includeTrashed?: boolean;
       };
       const collection = requireCollection(
@@ -326,17 +344,42 @@ function findDocumentsTool(context: ToolContext): AgentTool {
       const limit = Math.min(input.limit ?? 10, maxSearchResults);
       const title = titleField(collection);
 
+      const offset = input.offset ?? 0;
+      const listed = (input.fields ?? []).map((name) => {
+        // The same refusal as a patch: a field that does not exist and one
+        // this account may not read are indistinguishable from here.
+        if (
+          !(name in collection.fields) ||
+          !mayReadField(collection, name, context.actor, locale)
+        ) {
+          throw CmsError.validation(
+            `"${name}" is not a field of ${collection.name}. Call describe_cms and use a field that exists.`,
+          );
+        }
+        return name;
+      });
+      const search = where(collection, input.query, context.actor, locale);
       const page = await collectionApi(context, collection).find({
         actor: context.actor,
         locale,
-        limit,
+        // A search reads a wider window and ranks it; the database only
+        // knows "matches any word", and the newest of those is rarely the
+        // best of them.
+        limit: search ? maxSearchCandidates : limit,
+        // A real count, not the length of this page: "how many posts do we
+        // have" was otherwise answered with the page size.
+        count: true,
+        ...(offset > 0 ? { offset } : {}),
         ...(input.includeTrashed === true ? { includeTrashed: true } : {}),
-        ...(where(collection, input.query, context.actor, locale) ?? {}),
+        ...(search ? { where: search.where } : {}),
       });
+      const docs = search
+        ? rank(page.docs, search.patterns, search.fields, title).slice(0, limit)
+        : page.docs;
 
-      if (page.docs.length === 0) {
+      if (docs.length === 0) {
         return toolText(
-          `No ${collection.label} matched${input.query ? ` "${input.query}"` : ""}.`,
+          `No ${collection.label} matched${input.query ? ` "${input.query}"` : ""}${offset > 0 ? ` past the first ${offset}` : ""}.`,
         );
       }
 
@@ -344,15 +387,28 @@ function findDocumentsTool(context: ToolContext): AgentTool {
         JSON.stringify({
           collection: collection.name,
           locale,
-          total: page.docs.length,
-          hasMore: page.hasNextPage,
-          results: page.docs.map((document) => ({
-            id: String(document.id),
-            revision: document.revision,
-            title: recordTitle(document, title),
-            summary: recordSummary(collection, document, title ? [title] : []),
-            ...(document.deletedAt === null ? {} : { trashed: true }),
-          })),
+          total: page.totalDocs ?? docs.length,
+          returned: docs.length,
+          offset,
+          hasMore: (page.totalDocs ?? 0) > offset + docs.length || page.hasNextPage, // prettier-ignore
+          results: docs.map((document) => {
+            const untranslated = Object.keys(fallbackFields(document));
+            return {
+              id: String(document.id),
+              revision: document.revision,
+              title: recordTitle(document, title),
+              summary: recordSummary(
+                collection,
+                document,
+                title ? [title] : [],
+              ),
+              ...(listed.length === 0
+                ? {}
+                : { fields: fieldExcerpts(collection, document, listed) }),
+              ...(untranslated.length === 0 ? {} : { untranslated }),
+              ...(document.deletedAt === null ? {} : { trashed: true }),
+            };
+          }),
         }),
       );
     },
@@ -388,6 +444,7 @@ function getDocumentTool(context: ToolContext): AgentTool {
         collection,
         input.id,
         locale,
+        { forDisplay: true },
       );
       const visible = readableFields(collection, context.actor, locale);
 
@@ -400,7 +457,12 @@ function getDocumentTool(context: ToolContext): AgentTool {
           writableFields: visible.filter((name) =>
             mayWriteField(collection, name, context.actor, locale),
           ),
-          record: renderRecord(collection, document, visible),
+          record: renderRecord(
+            collection,
+            document,
+            visible,
+            relationTitle(context),
+          ),
         }),
       );
     },
@@ -643,7 +705,9 @@ function getGlobalTool(context: ToolContext): AgentTool {
       const input = parameters as { global: string; locale?: string };
       const global = requireCollection(context.config, input.global, "global");
       const locale = localeFor(context.config, context.page, input.locale);
-      const document = await readGlobal(context, global, locale);
+      const document = await readGlobal(context, global, locale, {
+        forDisplay: true,
+      });
       const visible = readableFields(global, context.actor, locale);
 
       return toolText(
@@ -654,7 +718,12 @@ function getGlobalTool(context: ToolContext): AgentTool {
           writableFields: visible.filter((name) =>
             mayWriteField(global, name, context.actor, locale),
           ),
-          record: renderRecord(global, document, visible),
+          record: renderRecord(
+            global,
+            document,
+            visible,
+            relationTitle(context),
+          ),
         }),
       );
     },
@@ -1125,16 +1194,27 @@ function readableFields(
   );
 }
 
+/**
+ * `forDisplay` resolves relations one level deep, through the engine and
+ * with the same actor — a related record this account cannot read stays an
+ * id — so that the record can name what it points at.
+ */
+interface ReadOptions {
+  forDisplay?: boolean;
+}
+
 async function readDocument(
   context: ToolContext,
   collection: ResolvedCollection,
   id: string,
   locale: string,
+  options: ReadOptions = {},
 ): Promise<JsonObject> {
   const document = await collectionApi(context, collection).findById(id, {
     actor: context.actor,
     locale,
     includeTrashed: true,
+    ...(options.forDisplay ? { depth: 1 } : {}),
   });
   if (!document) {
     throw CmsError.notFound(
@@ -1148,8 +1228,29 @@ async function readGlobal(
   context: ToolContext,
   global: ResolvedCollection,
   locale: string,
+  options: ReadOptions = {},
 ): Promise<JsonObject> {
-  return globalApi(context, global).get({ actor: context.actor, locale });
+  return globalApi(context, global).get({
+    actor: context.actor,
+    locale,
+    ...(options.forDisplay ? { depth: 1 } : {}),
+  });
+}
+
+/**
+ * The name a related record goes by: its collection's title field, a file's
+ * name, a user's display name. Anything else stays an id — a relation into
+ * a table this file knows nothing about is not one to start reading from.
+ */
+function relationTitle(context: ToolContext): RelationTitle {
+  return (target, document) => {
+    const collection = context.config.collections[target];
+    if (collection) return recordTitle(document, titleField(collection));
+    const key =
+      target === "media" ? "filename" : target === "cms_users" ? "name" : null;
+    const value = key === null ? undefined : document[key];
+    return typeof value === "string" && value.trim().length > 0 ? value : null;
+  };
 }
 
 export function collectionApi(
@@ -1184,29 +1285,88 @@ export function globalApi(
  * model controls is one somebody will eventually get it to point somewhere
  * unintended.
  */
+interface Search {
+  where: ReturnType<typeof and>;
+  /** The phrase first, then its words; the phrase weighs more. */
+  patterns: string[];
+  fields: string[];
+}
+
 function where(
   collection: ResolvedCollection,
   query: string | undefined,
   actor: Actor | null,
   locale: string,
-): { where: ReturnType<typeof and> } | undefined {
+): Search | undefined {
   const trimmed = query?.trim();
   if (!trimmed) return undefined;
 
-  const searchable = Object.entries(collection.fields)
-    .filter(
-      ([name, field]) =>
-        ["text", "textarea", "email"].includes(field.type) &&
-        mayReadField(collection, name, actor, locale),
-    )
-    .map(([name, field]) =>
-      like(field.localized ? `${name}.${locale}` : name, `%${trimmed}%`, true),
-    );
+  // The phrase, and each distinctive word of it on its own. Models search
+  // with a sentence ("failed card payments") and a title says it another way
+  // ("What happens when a payment fails?"); matching the phrase alone sent
+  // the agent round six searches for an article that was there all along.
+  const words = [
+    ...new Set(
+      trimmed
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter((word) => word.length >= 4)
+        // A crude stem, and deliberately so: the first five letters are what
+        // "payments" shares with "payment" and "płatnościach" with
+        // "płatność". Over-matching is cheap — the ranking below sorts it out —
+        // and missing the record is what costs another round trip.
+        .map((word) => (word.length >= 6 ? word.slice(0, 5) : word)),
+    ),
+  ].slice(0, 6);
+  const patterns = [trimmed, ...words.filter((word) => word !== trimmed.toLowerCase())]; // prettier-ignore
+
+  const fields = Object.entries(collection.fields).filter(
+    ([name, field]) =>
+      ["text", "textarea", "email", "slug"].includes(field.type) &&
+      mayReadField(collection, name, actor, locale),
+  );
+  const searchable = fields.flatMap(([name, field]) =>
+    patterns.map((pattern) =>
+      like(field.localized ? `${name}.${locale}` : name, `%${pattern}%`, true),
+    ),
+  );
 
   if (searchable.length === 0) return undefined;
   return {
     where: and(or(...searchable, eq("id", trimmed))),
+    patterns,
+    fields: fields.map(([name]) => name),
   };
+}
+
+/**
+ * The candidates, best first: the whole phrase beats a word, the title beats
+ * any other field, and ties keep the database's order (newest first).
+ */
+function rank(
+  docs: JsonObject[],
+  patterns: string[],
+  fields: string[],
+  title: string | null,
+): JsonObject[] {
+  const lowered = patterns.map((pattern) => pattern.toLowerCase());
+  const score = (document: JsonObject): number => {
+    let total = 0;
+    for (const name of fields) {
+      const value = document[name];
+      if (typeof value !== "string") continue;
+      const text = value.toLowerCase();
+      const weight = name === title ? 2 : 1;
+      lowered.forEach((pattern, index) => {
+        if (text.includes(pattern)) total += weight * (index === 0 ? 3 : 1);
+      });
+    }
+    return total;
+  };
+  return docs
+    .map((document, index) => ({ document, index, score: score(document) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.document);
 }
 
 function mediaSummary(file: MediaDocument): JsonObject {
