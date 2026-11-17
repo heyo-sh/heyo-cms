@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import { api, ApiError, mount } from "./api";
+import { readEventStream } from "./event-stream";
 import { routePageContext } from "./page-context";
 import { usePanel } from "./panel";
 import { useRouter } from "./router";
@@ -195,6 +196,11 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
       // state updater is not a place for a side effect, because React is
       // allowed to run one more than once for a single update.
       let answer = "";
+      // Whether the server closed the run itself, with `done` or `error`. A
+      // stream that just stops — a proxy cutting an idle connection, a
+      // deploy, a laptop lid — ends without either, and used to leave the
+      // editor with an empty bubble and no idea anything went wrong.
+      let finished = false;
 
       // Where the editor is, with the route as the floor under it. A send
       // can happen before the screen's effect has registered anything, and
@@ -223,6 +229,7 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
         },
         signal: controller.signal,
         onEvent: (event) => {
+          if (event.type === "done" || event.type === "error") finished = true;
           if (event.type === "text-delta") answer += event.text;
           setTurns((current) => apply(current, event));
           if (event.type === "mutation-applied") {
@@ -234,6 +241,17 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
           }
         },
       })
+        .then(() => {
+          if (finished || controller.signal.aborted) return;
+          setTurns((current) =>
+            apply(current, {
+              type: "error",
+              code: "stream_interrupted",
+              message:
+                "The connection to the assistant was lost before it finished. Try again.",
+            }),
+          );
+        })
         .catch((error: unknown) => {
           if (controller.signal.aborted) return;
           setTurns((current) =>
@@ -366,35 +384,7 @@ async function stream(options: {
     );
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const payload = frame
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .join("");
-      if (payload.length > 0) {
-        try {
-          options.onEvent(JSON.parse(payload) as AiAssistantEvent);
-        } catch {
-          // A frame we cannot parse is a frame from a newer server. Dropping
-          // it is better than ending a conversation that is otherwise fine.
-        }
-      }
-      boundary = buffer.indexOf("\n\n");
-    }
-  }
+  await readEventStream(response.body, options.onEvent);
 }
 
 /** One event, folded into the assistant turn that is being built. */

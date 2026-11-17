@@ -390,7 +390,11 @@ function schemas(cms: CmsInstance): JsonObject {
             "error",
           ],
         },
-        text: { type: "string", description: "`text-delta` only." },
+        text: {
+          type: "string",
+          description:
+            "`text-delta` only. The answer, whole: only the model's final message reaches the client, never the text it wrote on its way to a tool call, the tool results or the prompt. Concatenate every `text-delta` of a run.",
+        },
         id: { type: "string", description: "Tool call id." },
         label: { type: "string", description: "`tool-start` only." },
         summary: {

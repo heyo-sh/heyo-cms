@@ -261,8 +261,11 @@ describe("the assistant, from the panel", () => {
     expect(drawer).not.toBeNull();
     expect(drawer?.textContent).toContain("znajdź artykuł o uploadach");
     expect(drawer?.textContent).toContain("Znalazłem dwa artykuły.");
-    // The trace is the server's summary, never the tool's arguments.
-    expect(drawer?.textContent).toContain("Searched documents");
+    // The answer, not the work: the steps on the way are not part of the
+    // reply, and listing them made every answer read like a log.
+    expect(drawer?.textContent).not.toContain("Searched documents");
+    expect(drawer?.textContent).not.toContain("Search documents");
+    expect(drawer?.textContent).not.toContain("Thinking…");
 
     // The page context travels, so "this article" has something to resolve.
     const sent = assistantRequests.at(-1) as {
@@ -281,6 +284,29 @@ describe("the assistant, from the panel", () => {
     expect(after).not.toBeNull();
     expect(after?.textContent).toContain("znajdź artykuł o uploadach");
     expect(after?.textContent).toContain("Znalazłem dwa artykuły.");
+  });
+
+  test("the Markdown a model writes anyway is shown as text, never parsed as HTML", async () => {
+    assistantScript = [
+      {
+        type: "text-delta",
+        text: '## Wyniki\n- **Dwa** artykuły\n<img src="x" onerror="alert(1)">',
+      },
+      { type: "done", runId: "air_md", usage: { input: 1, output: 1, total: 2, cost: 0 } }, // prettier-ignore
+    ];
+    await mount("/c/posts");
+    await ask("podsumuj");
+
+    const drawer = container.querySelector('[aria-label="AI assistant"]');
+    expect(drawer?.textContent).toContain("Wyniki");
+    expect(drawer?.textContent).not.toContain("## Wyniki");
+    expect(drawer?.textContent).not.toContain("**");
+    expect(
+      [...(drawer?.querySelectorAll("strong") ?? [])].map((node) => node.textContent), // prettier-ignore
+    ).toEqual(["Wyniki", "Dwa"]);
+    // The tag is text on the screen, not an element in the page.
+    expect(drawer?.querySelector("img")).toBeNull();
+    expect(drawer?.textContent).toContain('<img src="x"');
   });
 
   test("an approval is a button, and the plan shows names rather than values", async () => {

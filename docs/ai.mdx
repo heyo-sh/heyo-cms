@@ -29,6 +29,7 @@ ai: {
     maxTurns: 8,
     maxToolCalls: 16,
     timeoutMs: 90_000,
+    thinking: "low",          // optional; see "Answers" below
   },
 }
 ```
@@ -98,6 +99,47 @@ neither. Without the agent package the endpoint answers
 The panel shows a centred composer on every signed-in screen. The first
 message opens a drawer on the right; the page underneath stays live, so the
 editor can navigate and watch the result while the conversation stays put.
+
+### Answers
+
+The editor sees "Thinking…" while the agent works, then the answer. Only the
+model's **final** message is sent as `text-delta`, whole, when it ends: what a
+model writes on its way to a tool call ("let me look that up"), the tool
+results and the editor's own prompt never reach the stream. The `tool-start`
+and `tool-end` events still announce each step, for a client that wants to
+show them; the panel does not. The system prompt asks for plain prose in the
+editor's language — no JSON, no record ids, no tool names, records named by
+their title — and the panel renders the little Markdown models write anyway
+(`**bold**`, `#` headings) as text, never as HTML.
+
+What the model reads is shaped for that too. A relation in a record names the
+related record (`"Payments" [doc_…]`, resolved with the actor's own read
+access), empty fields are listed on one line, and a field that has no value in
+the language being read says so instead of passing the default language's text
+off as a translation. `find_documents` reports the real number of matches,
+ranks a search by the words of the query, and can return a few named fields for
+every result, so "which articles have no SEO description" is one call rather
+than one per article.
+
+The model never sees a revision. Every read records the version it saw on
+the server, and a write is made against that version: it fails with a
+conflict if somebody saved in the meantime, and a record the agent has not
+read in the run cannot be written at all.
+
+The limits wind a run down rather than cutting it off. When `maxTurns` or
+`maxToolCalls` is spent, or the time left would not cover an answer — three
+quarters of `timeoutMs` have passed, or what remains is less than twice the
+slowest step so far — the tools refuse and the model is told to answer from
+what it has read. A model that ignores
+that is stopped with `ai_budget_exhausted`; a run that reaches `timeoutMs` ends
+with `ai_timeout`, showing whatever part of the answer was already written,
+marked as incomplete. A client that disconnects aborts the provider call, and
+the run is still recorded as `ai.agent.failed` with what it had spent.
+
+`thinking` is how much a reasoning model reasons before each step: `off`,
+`minimal`, `low`, `medium` or `high`. By default it is `off`, or `low` for a
+model that cannot switch reasoning off — OpenAI's GPT-5 family, whose own
+default, `medium`, makes every step a long, silent wait.
 
 ### What it can reach
 

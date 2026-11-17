@@ -393,6 +393,12 @@ function assistantRoutes(cms: CmsInstance): RouteRecord[] {
  * event rather than as a non-200 response, because by the time the body is
  * being produced the status line has already been sent.
  */
+/**
+ * How often an idle stream says it is still there. An object rather than a
+ * constant so a test can shorten it instead of waiting fifteen seconds.
+ */
+export const assistantStreamTiming = { heartbeatMs: 15_000 };
+
 function eventStream(
   start: (signal: AbortSignal) => AsyncIterable<AiAssistantEvent>,
   request: Request,
@@ -417,21 +423,38 @@ function eventStream(
       // controller into something that throws — and the first place that
       // would bite is the error handler below, which would then throw while
       // reporting the error it was called for.
-      const send = (event: AiAssistantEvent) => {
+      const write = (frame: string) => {
         if (closed) return;
         try {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
-          );
+          controller.enqueue(encoder.encode(frame));
         } catch {
           closed = true;
         }
       };
+      const send = (event: AiAssistantEvent) =>
+        write(`data: ${JSON.stringify(event)}\n\n`);
+
+      // A comment frame now and then. The answer arrives whole, at the end,
+      // and a model reasoning through one long step can leave the socket
+      // silent for longer than a proxy's idle timeout (Cloudflare's is 100
+      // seconds); a client ignores a frame without `data:`.
+      const heartbeat = setInterval(
+        () => write(": keep-alive\n\n"),
+        assistantStreamTiming.heartbeatMs,
+      );
 
       try {
         for (;;) {
           const next = await iterator.next();
-          if (next.done || signal.aborted) break;
+          if (next.done) break;
+          if (signal.aborted) {
+            // Nobody is reading any more, but the run is not over: it has
+            // been aborted and still has to wind down and record what it
+            // spent. Drained in the background, without sending, so the
+            // response can close now.
+            void drain(iterator);
+            break;
+          }
           send(next.value);
         }
       } catch (error) {
@@ -447,6 +470,7 @@ function eventStream(
           }
         }
       } finally {
+        clearInterval(heartbeat);
         request.signal.removeEventListener("abort", stop);
         closed = true;
         try {
@@ -457,12 +481,12 @@ function eventStream(
       }
     },
     cancel() {
-      // Aborting, never awaiting. A generator parked on a model call does not
-      // settle its `return()` until that call finishes, so waiting here would
-      // hold the cancel open for exactly as long as the run it is trying to
-      // stop. The abort is what actually ends it.
+      // Aborting, never awaiting, and never `return()`. The abort is what
+      // ends the run; the loop in `start` notices it and drains what is
+      // left. Returning the generator instead skipped everything after its
+      // loop — including recording `ai.agent.failed` and the tokens the run
+      // had already spent, so an abandoned run vanished from the accounts.
       stop();
-      void iterator.return?.().catch(() => undefined);
     },
   });
 
@@ -476,6 +500,20 @@ function eventStream(
       "x-accel-buffering": "no",
     },
   });
+}
+
+/** Runs an aborted generator to its end, so its own bookkeeping happens. */
+async function drain(iterator: AsyncIterator<AiAssistantEvent>): Promise<void> {
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) return;
+    }
+  } catch (error) {
+    if (!(error instanceof CmsError)) {
+      console.error("[heyo-cms] the AI assistant failed after the client left", error); // prettier-ignore
+    }
+  }
 }
 
 function assistantHistory(value: unknown): AiAssistantTurn[] {
