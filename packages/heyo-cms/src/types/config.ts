@@ -570,8 +570,21 @@ export interface AiAssistantConfig {
   maxTurns?: number;
   /** Tool calls across the whole run. Defaults to 16. */
   maxToolCalls?: number;
-  /** Milliseconds before the run is aborted. Defaults to 90_000. */
+  /**
+   * Milliseconds before the run is aborted. Defaults to 90_000. After three
+   * quarters of it the agent stops calling tools and answers from what it
+   * has, so the editor gets an answer rather than a timeout.
+   */
   timeoutMs?: number;
+  /**
+   * How much the model reasons before each step, for models that can.
+   *
+   * Defaults to the least the model allows: `off`, or `low` for a reasoning
+   * model that cannot switch reasoning off (OpenAI's GPT-5 family, whose own
+   * default is `medium` — slow, and mostly spent deciding which tool to
+   * call). Higher levels trade waiting time and tokens for care.
+   */
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
 }
 
 /**

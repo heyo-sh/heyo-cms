@@ -283,6 +283,12 @@ export interface AiPlanSummary {
  * raw result.
  */
 export type AiAssistantEvent =
+  /**
+   * The answer. Sent whole when the model's final message ends, not as it is
+   * typed: until then nothing says whether a message is the answer or the
+   * model thinking aloud on its way to a tool call, and the second kind is
+   * never shown. Concatenate every `text-delta` of a run.
+   */
   | { type: "text-delta"; text: string }
   | { type: "tool-start"; id: string; label: string }
   | { type: "tool-end"; id: string; summary: string }

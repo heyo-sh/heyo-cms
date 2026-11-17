@@ -24,14 +24,10 @@ import {
   IconSparkles,
   IconX,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { usePanel } from "../lib/panel";
-import {
-  useAssistant,
-  type AssistantStep,
-  type AssistantTurn,
-} from "../lib/assistant";
+import { useAssistant, type AssistantTurn } from "../lib/assistant";
 import { Link, useRouter } from "../lib/router";
 import { toast } from "../lib/toast";
 
@@ -222,11 +218,15 @@ function AssistantDrawer({ open }: { open: boolean }) {
           {turns.map((turn, index) => (
             <Turn key={index} turn={turn} />
           ))}
+          {/* The whole of the progress the editor is shown. The answer
+              arrives in one piece when the agent is done; the reads and
+              searches on the way are its business, and listing them made
+              the reply look like a log. */}
           {streaming && turns.at(-1)?.text === "" ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2" role="status">
               <Spinner size="sm" />
               <Text size="xs" tone="subtle">
-                Working…
+                Thinking…
               </Text>
             </div>
           ) : null}
@@ -344,21 +344,15 @@ function Turn({ turn }: { turn: AssistantTurn }) {
 
   return (
     <div className="flex flex-col gap-2">
-      {turn.steps && turn.steps.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          {turn.steps.map((step) => (
-            <Step key={step.id} step={step} />
-          ))}
-        </div>
-      ) : null}
-
       {turn.text.length > 0 ? (
-        // Plain text, deliberately. No `dangerouslySetInnerHTML` and no
-        // Markdown renderer: the answer is produced by a model that has just
-        // read editor-supplied content, and the cheapest way to be certain it
-        // cannot inject anything is for it never to become HTML.
+        // Text nodes and two inline elements, deliberately. No
+        // `dangerouslySetInnerHTML` and no Markdown library: the answer is
+        // produced by a model that has just read editor-supplied content, and
+        // the cheapest way to be certain it cannot inject anything is for it
+        // never to become HTML. `AnswerText` only strips the Markdown that
+        // models write anyway, so it does not show up as `**` and `##`.
         <Text size="sm" className="whitespace-pre-wrap">
-          {turn.text}
+          <AnswerText text={turn.text} />
         </Text>
       ) : null}
 
@@ -387,25 +381,60 @@ function Turn({ turn }: { turn: AssistantTurn }) {
 }
 
 /**
- * One tool call, as a line the editor can read.
- *
- * The label and the summary both come from the server. Neither the tool's
- * arguments nor its result appear: a trace that printed them would put field
- * values on screen that the surrounding page may be deliberately hiding.
+ * The answer, with the Markdown a model writes regardless of what it is told
+ * reduced to what plain text can carry: a `#` heading becomes a bold line,
+ * `**bold**` bold and `` `code` `` monospace. Lists are left as they are,
+ * because `- item` already reads as a list. Everything is a text node or a
+ * `strong`/`code` element built here — nothing from the model is ever parsed
+ * as HTML.
  */
-function Step({ step }: { step: AssistantStep }) {
+export function AnswerText({ text }: { text: string }) {
+  const lines = text.split("\n");
   return (
-    <div className="flex items-center gap-2">
-      {step.summary ? (
-        <IconCheck className="size-3 shrink-0 text-heyo-subtle" />
-      ) : (
-        <Spinner size="sm" />
-      )}
-      <Text size="xs" tone="subtle">
-        {step.summary ?? step.label}
-      </Text>
-    </div>
+    <>
+      {lines.map((line, index) => {
+        const heading = /^\s{0,3}#{1,6}\s+(.*)$/.exec(line);
+        const content = heading ? (
+          <strong className="font-semibold">{inline(heading[1] ?? "")}</strong>
+        ) : (
+          inline(line)
+        );
+        return (
+          <span key={index}>
+            {content}
+            {index < lines.length - 1 ? "\n" : null}
+          </span>
+        );
+      })}
+    </>
   );
+}
+
+function inline(line: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  let last = 0;
+  for (const match of line.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > last) parts.push(line.slice(last, start));
+    parts.push(
+      match[1] !== undefined ? (
+        <strong key={start} className="font-semibold">
+          {match[1]}
+        </strong>
+      ) : (
+        <code
+          key={start}
+          className="rounded bg-heyo-recessed px-1 text-[0.85em]"
+        >
+          {match[2]}
+        </code>
+      ),
+    );
+    last = start + match[0].length;
+  }
+  if (last < line.length) parts.push(line.slice(last));
+  return parts;
 }
 
 function SavedCard({
