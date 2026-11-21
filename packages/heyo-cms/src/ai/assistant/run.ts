@@ -69,6 +69,15 @@ const answerAllowance = 2;
 const wrapUpInstruction =
   "No more tool calls are available for this request. Do not call any tool. Answer the editor now from what you have already read, in their language, and say plainly what you could not finish.";
 
+/**
+ * The same, while the run may still end in a proposal: out of steps, but not
+ * out of time, and no proposal made since. See `mayStillPropose`. It names no
+ * tool: a model that has been told a tool's name repeats it to the editor,
+ * and the prompt has already said which tools show a card.
+ */
+const wrapUpWithProposal =
+  "No more tool calls are available for reading, searching or saving in this request. If the editor asked for a change and you already know exactly what it is, you may still make one approval call, the kind that shows them an Approve card, instead of asking whether to prepare it. Otherwise do not call any tool. Answer the editor now from what you have already read, in their language, and say plainly what you could not finish.";
+
 const noAnswer =
   "I could not put an answer together for that. Try asking again, or more specifically.";
 
@@ -126,12 +135,19 @@ export async function* runAssistant(
   // the agent emits whenever it likes, and the caller consumes at its own
   // pace without any of them being dropped.
   const queue = new EventQueue();
-  const plans = new PlanStore({ database: options.database });
+  const store = new PlanStore({ database: options.database });
   const mutations: { target: AiMutationTarget; fields: string[] }[] = [];
+  /**
+   * Plans waiting to be announced. Held until the answer is out rather than
+   * sent when the tool runs: a plan is an Approve button, and a button that
+   * appears while the model is still writing the sentence that explains it
+   * gets pressed — or watched move as the explanation arrives above it. So
+   * a run's plans are always the last thing it says before it ends.
+   */
+  const plans: AiPlanSummary[] = [];
   const toolNames: string[] = [];
   let usage: AiUsage = emptyUsage();
   let spent = 0;
-  let planned = 0;
 
   let agent: Agent | undefined;
   let failure: unknown;
@@ -168,8 +184,11 @@ export async function* runAssistant(
    * wrap-up: the tools refuse, the model is told to answer from what it has,
    * and only a model that ignores that is stopped outright.
    */
-  const wrappingUp = () => {
-    if (turns >= maxTurns || spent >= maxToolCalls) return true;
+  const wrappingUp = () => outOfSteps() || outOfTime();
+  function outOfSteps(): boolean {
+    return turns >= maxTurns || spent >= maxToolCalls;
+  }
+  function outOfTime(): boolean {
     const elapsed = Date.now() - started;
     // Time is measured against the model actually in use, not only as a
     // share of the budget: the answer is usually the longest step, and a
@@ -179,7 +198,26 @@ export async function* runAssistant(
       elapsed >= timeoutMs * wrapUpAt ||
       elapsed + slowestStep * answerAllowance >= timeoutMs
     );
-  };
+  }
+  /**
+   * Whether a run that is winding down may still make one proposal.
+   *
+   * A request to change several records is answered by a plan, and reading
+   * them first is what spends the steps — so the budget ran out exactly when
+   * the model knew what to propose, and all it could still do was ask "shall
+   * I prepare the changes?". The editor said yes, and then confirmed again on
+   * the card. A proposal writes nothing, so letting the wrap-up turn make one
+   * costs one more step and spares the editor that round trip.
+   *
+   * Once, and only while there is still a turn left for the answer after it
+   * and time to write it: a model short of time is not given a reason to
+   * spend more of it.
+   */
+  let proposedWhileWrappingUp = false;
+  const mayStillPropose = () =>
+    !proposedWhileWrappingUp && turns <= maxTurns && !outOfTime();
+  const wrapUp = () =>
+    mayStillPropose() ? wrapUpWithProposal : wrapUpInstruction;
 
   // One controller for the two things that end a run early: the client
   // closing the socket, and the configured timeout. Both have to reach the
@@ -209,14 +247,17 @@ export async function* runAssistant(
       actor,
       page,
       runId,
-      plans,
+      plans: store,
       signal: controller.signal,
-      spend: () => {
+      spend: (kind) => {
         if (wrappingUp()) {
-          throw new CmsError(wrapUpInstruction, {
-            status: 429,
-            code: "ai_tool_budget_exhausted",
-          });
+          if (kind !== "proposal" || !mayStillPropose()) {
+            throw new CmsError(wrapUp(), {
+              status: 429,
+              code: "ai_tool_budget_exhausted",
+            });
+          }
+          proposedWhileWrappingUp = true;
         }
         spent += 1;
       },
@@ -225,8 +266,7 @@ export async function* runAssistant(
         queue.push({ type: "mutation-applied", runId, target, fields });
       },
       onPlan: (plan: AiPlanSummary) => {
-        planned += 1;
-        queue.push({ type: "approval-required", plan });
+        plans.push(plan);
       },
     });
 
@@ -265,7 +305,7 @@ export async function* runAssistant(
               ...messages,
               {
                 role: "user",
-                content: wrapUpInstruction,
+                content: wrapUp(),
                 timestamp: Date.now(),
               } as AgentMessage,
             ]
@@ -420,7 +460,7 @@ export async function* runAssistant(
       const fallback =
         narration.length > 0
           ? narration
-          : mutations.length > 0 || planned > 0
+          : mutations.length > 0 || plans.length > 0
             ? ""
             : noAnswer;
       if (fallback.length > 0) {
@@ -471,9 +511,14 @@ export async function* runAssistant(
         text: `${partial}…\n\n[Ran out of time — this answer is incomplete.]`,
       };
     }
+    // A plan made before the failure is stored and approvable, and the
+    // editor may well still want it; the failure is not a reason to hide it.
+    for (const plan of plans) yield { type: "approval-required", plan };
     yield { type: "error", code: error.code, message: error.message };
     return;
   }
+
+  for (const plan of plans) yield { type: "approval-required", plan };
 
   for (const mutation of mutations) {
     await safely(() =>

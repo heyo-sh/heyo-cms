@@ -252,7 +252,7 @@ function assistantRoutes(cms: CmsInstance): RouteRecord[] {
       openapi: {
         summary: "Talk to the assistant",
         description:
-          "Server-sent events. The agent reads and writes through the ordinary API with the caller's own permissions, so every change it makes runs the same validation, hooks, events and activity log as a form save — with `source: ai` and the signed-in human as the actor.\n\nCreating, deleting and multi-record changes never happen here: they arrive as `approval-required` and are executed by the approval endpoint.",
+          "Server-sent events. The agent reads and writes through the ordinary API with the caller's own permissions, so every change it makes runs the same validation, hooks, events and activity log as a form save — with `source: ai` and the signed-in human as the actor.\n\nCreating, deleting and multi-record changes never happen here: they arrive as `approval-required` — after the answer, just before `done` — and are executed by the approval endpoint.",
         tags,
         requestBody: jsonBody({
           type: "object",

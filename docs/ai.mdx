@@ -130,11 +130,14 @@ The limits wind a run down rather than cutting it off. When `maxTurns` or
 `maxToolCalls` is spent, or the time left would not cover an answer — three
 quarters of `timeoutMs` have passed, or what remains is less than twice the
 slowest step so far — the tools refuse and the model is told to answer from
-what it has read. A model that ignores
-that is stopped with `ai_budget_exhausted`; a run that reaches `timeoutMs` ends
-with `ai_timeout`, showing whatever part of the answer was already written,
-marked as incomplete. A client that disconnects aborts the provider call, and
-the run is still recorded as `ai.agent.failed` with what it had spent.
+what it has read. A run that ran out of _steps_ (not of time) may still make one
+proposal in that turn — a proposal writes nothing, and the model that has just
+read the records is otherwise left asking "shall I prepare the changes?". A
+model that ignores the wrap-up is stopped with `ai_budget_exhausted`; a run
+that reaches `timeoutMs` ends with `ai_timeout`, showing whatever part of the
+answer was already written, marked as incomplete. A client that disconnects
+aborts the provider call, and the run is still recorded as `ai.agent.failed`
+with what it had spent.
 
 `thinking` is how much a reasoning model reasons before each step: `off`,
 `minimal`, `low`, `medium` or `high`. By default it is `off`, or `low` for a
@@ -200,7 +203,11 @@ rather than naming a collection that does not exist.
 ### Writing
 
 A single unambiguous change to an existing record is applied immediately —
-"edit this and save it" means exactly that. Everything else waits for a human:
+"edit this and save it" means exactly that. One record per request: once a run
+has saved one document directly, `update_document` refuses a different one and
+sends the model to `create_mutation_plan` with the rest, so "fill this in on
+every post" ends in one approval rather than a string of saves. Everything else
+waits for a human:
 
 - creating, trashing, restoring, purging;
 - anything touching more than one record;
@@ -211,6 +218,21 @@ expiry. The panel shows how many records and which fields, and `Approve` posts
 to `/ai/assistant/plans/:id/approve`. The server re-checks the session, the
 permissions and the revisions, then replays the stored row. The model is not
 consulted again, so what runs is what was on screen.
+
+The card is the confirmation, and it is the only one. The prompt and every
+approval tool tell the model to call the tool as soon as it knows the record
+and the change, rather than asking "shall I delete it?" in the chat and making
+the editor say yes twice; a single change it wants reviewed is proposed as a
+one-operation plan rather than asked about. The tool result carries no plan id
+— the titles of the records instead — so there is nothing for the model to
+repeat.
+
+A plan is announced when the run has finished talking: `approval-required`
+arrives after the answer, just before `done` (or before `error`, if the run
+failed after making it — the plan is stored and still approvable). The panel
+likewise draws a turn's Saved and approval cards only once the turn is
+complete, so the answer never appears above a button the editor is already
+reading. Screens are still told about a write the moment it commits.
 
 ### Revisions
 
