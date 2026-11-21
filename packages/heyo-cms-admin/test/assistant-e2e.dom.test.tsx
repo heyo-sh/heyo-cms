@@ -357,14 +357,75 @@ describe("changing things, from the drawer", () => {
     );
     await mount("/c/posts");
     await ask("Dodaj wpis o zmianie karty");
-    await until(() => drawer().includes("waiting for your approval"));
-    expect(drawer()).toContain("Needs approval");
+    await until(() => drawer().includes("Needs approval"));
+    expect(drawer()).toContain("waiting for your approval");
 
     const count = async () => (await cms.api.posts.find({ actor: systemActor(), count: true })).totalDocs; // prettier-ignore
     const before = await count();
     await click(buttonIn(drawerElement(), "Approve"));
     await until(() => drawer().includes("Saved"));
     expect(await count()).toBe((before ?? 0) + 1);
+  });
+});
+
+describe("cards come with the answer, not before it", () => {
+  test("the Approve card is not on screen until the whole answer is — and then sits under it", async () => {
+    const release = gate();
+    const final = "I prepared the post “How to change a card”. It is waiting for your approval below."; // prettier-ignore
+    model(
+      () => acting(null, call("create_document", { collection: "posts", locale: "en", data: { title: "How to change a card" } })), // prettier-ignore
+      async () => {
+        await release.promise;
+        return say(final);
+      },
+    );
+    await mount("/c/posts");
+    await ask("Dodaj wpis o zmianie karty");
+    // The plan exists and the model is writing the answer about it.
+    await until(() => calls.length === 2);
+    await settle();
+
+    expect(drawer()).toContain("Thinking…");
+    expect(drawer()).not.toContain("Needs approval");
+    expect(buttonsIn(drawerElement(), "Approve")).toHaveLength(0);
+
+    release.open();
+    await until(() => drawer().includes("Needs approval"));
+    const shown = drawer();
+    expect(shown).toContain(final);
+    expect(shown).not.toContain("Thinking…");
+    // Read top to bottom: the explanation, then the button.
+    expect(shown.indexOf(final)).toBeLessThan(shown.indexOf("Needs approval")); // prettier-ignore
+    expect(buttonsIn(drawerElement(), "Approve")).toHaveLength(1);
+  });
+
+  test("a Saved card waits for the answer too, while the open form catches up at once", async () => {
+    const release = gate();
+    model(
+      () => acting(null, call("get_current_page", {})),
+      (turn) => {
+        const page = turn.json() as { documentId: string };
+        return acting(null, call("update_document", { collection: "posts", id: page.documentId, data: { title: "Failed card payments, explained" } })); // prettier-ignore
+      },
+      async () => {
+        await release.promise;
+        return say("Zapisałem nowy tytuł (angielski).");
+      },
+    );
+    await mount(`/c/posts/${postId}`);
+    await ask("Popraw tytuł");
+    await until(() => calls.length === 3);
+
+    // The write is real and the screen showing the record knows already.
+    await until(() => (control("Title") as HTMLInputElement).value === "Failed card payments, explained"); // prettier-ignore
+    // The drawer does not draw it yet.
+    expect(drawer()).toContain("Thinking…");
+    expect(drawer()).not.toContain("Saved");
+
+    release.open();
+    await until(() => drawer().includes("Saved"));
+    const shown = drawer();
+    expect(shown.indexOf("Zapisałem nowy tytuł")).toBeLessThan(shown.indexOf("Saved")); // prettier-ignore
   });
 });
 
@@ -451,6 +512,10 @@ function strongTexts(): string[] {
 
 function stopButton(): HTMLElement | null {
   return ([...drawerElement().querySelectorAll("button")].find((element) => element.textContent?.trim() === "Stop") ?? null) as HTMLElement | null; // prettier-ignore
+}
+
+function buttonsIn(scope: HTMLElement, label: string): HTMLElement[] {
+  return [...scope.querySelectorAll("button")].filter((element) => element.textContent?.trim() === label) as unknown as HTMLElement[]; // prettier-ignore
 }
 
 function buttonIn(scope: HTMLElement, label: string): HTMLElement {

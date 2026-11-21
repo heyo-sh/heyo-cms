@@ -298,6 +298,12 @@ export type AiAssistantEvent =
       target: AiMutationTarget;
       fields: string[];
     }
+  /**
+   * A change waiting for the editor's approval. Sent after the answer, just
+   * before `done` (or `error`), however early in the run the plan was made:
+   * a client can draw the Approve button the moment it arrives without the
+   * explanation for it turning up afterwards.
+   */
   | { type: "approval-required"; plan: AiPlanSummary }
   | { type: "done"; runId: string; usage: AiUsage }
   | { type: "error"; code: string; message: string };

@@ -216,7 +216,11 @@ function AssistantDrawer({ open }: { open: boolean }) {
       <ScrollArea className="min-h-0 flex-1" viewportClassName="px-4 py-4">
         <div className="flex flex-col gap-4">
           {turns.map((turn, index) => (
-            <Turn key={index} turn={turn} />
+            <Turn
+              key={index}
+              turn={turn}
+              pending={streaming && index === turns.length - 1}
+            />
           ))}
           {/* The whole of the progress the editor is shown. The answer
               arrives in one piece when the agent is done; the reads and
@@ -328,7 +332,22 @@ function Composer({
   );
 }
 
-function Turn({ turn }: { turn: AssistantTurn }) {
+function Turn({
+  turn,
+  pending = false,
+}: {
+  turn: AssistantTurn;
+  /**
+   * Still being answered. Its cards wait until it is not: an Approve button
+   * that appeared while the answer explaining it was still on its way was
+   * pushed down the drawer by that answer arriving above it — the editor
+   * read the card, then watched the reason for it appear somewhere else.
+   * The answer comes first and the cards with the end of the run, together.
+   * Only what is drawn waits: a write is still announced to the screens the
+   * moment it lands, so the open form never shows a stale value.
+   */
+  pending?: boolean;
+}) {
   if (turn.role === "user") {
     return (
       <div className="flex justify-end">
@@ -356,17 +375,19 @@ function Turn({ turn }: { turn: AssistantTurn }) {
         </Text>
       ) : null}
 
-      {turn.mutations?.map((mutation, index) => (
-        <SavedCard
-          key={index}
-          target={mutation.target}
-          fields={mutation.fields}
-        />
-      ))}
+      {pending
+        ? null
+        : turn.mutations?.map((mutation, index) => (
+            <SavedCard
+              key={index}
+              target={mutation.target}
+              fields={mutation.fields}
+            />
+          ))}
 
-      {turn.plans?.map((plan) => (
-        <PlanCard key={plan.id} plan={plan} />
-      ))}
+      {pending
+        ? null
+        : turn.plans?.map((plan) => <PlanCard key={plan.id} plan={plan} />)}
 
       {turn.error ? (
         <div className="flex items-start gap-2 rounded-lg bg-heyo-danger-tint p-2">

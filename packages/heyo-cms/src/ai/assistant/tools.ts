@@ -45,6 +45,15 @@ const maxListedFields = 5;
 const maxActivityResults = 25;
 
 /**
+ * Said in every approval tool's description, because that is what a model
+ * reads at the moment it decides whether to call: a model left to itself asks
+ * "shall I delete it?" first, and the editor ends up saying yes twice — once
+ * in the chat and again on the card.
+ */
+const callAtOnce =
+  "Call it as soon as you know which record and what change: the card is how the editor confirms, so do not ask them first whether you should.";
+
+/**
  * What a tool is allowed to change about the run around it.
  *
  * Narrow on purpose. A tool may read the configuration, call the instance,
@@ -62,10 +71,17 @@ export interface ToolContext {
   plans: PlanStore;
   /** Announced to the panel the moment a write commits. */
   onMutation: (target: AiMutationTarget, fields: string[]) => void;
-  /** Announced when a plan needs a human. */
+  /**
+   * A plan that needs a human. The run announces it once the answer is out,
+   * not at this moment.
+   */
   onPlan: (plan: ReturnType<typeof planSummary>) => void;
-  /** Spent by every tool call; the server's budget, not the model's. */
-  spend: () => void;
+  /**
+   * Spent by every tool call; the server's budget, not the model's. The
+   * approval tools say they are a `"proposal"`: a run that has run out of
+   * steps may still make one of those, because it writes nothing.
+   */
+  spend: (kind?: "proposal") => void;
   signal?: AbortSignal | undefined;
   /**
    * The revision of every record this run has read, by `revisionKey`.
@@ -79,10 +95,19 @@ export interface ToolContext {
    * read cannot be written at all.
    */
   revisions?: Map<string, number>;
+  /**
+   * The documents this run has saved directly, by `documentKey`. The first
+   * one is a save; a second, different one is refused towards a plan.
+   */
+  savedDocuments?: Set<string>;
 }
 
 export function createAssistantTools(given: ToolContext): AgentTool[] {
-  const context: ToolContext = { ...given, revisions: given.revisions ?? new Map() }; // prettier-ignore
+  const context: ToolContext = {
+    ...given,
+    revisions: given.revisions ?? new Map(),
+    savedDocuments: given.savedDocuments ?? new Set(),
+  };
   const tools: AgentTool[] = [
     describeCmsTool(context),
     currentPageTool(context),
@@ -501,7 +526,7 @@ function updateDocumentTool(context: ToolContext): AgentTool {
     name: "update_document",
     label: "Save changes to a document",
     description:
-      "Writes a patch to one existing document and saves it. Only the named fields change. The document has to have been read in this conversation first (get_document, get_current_page or find_documents); the save is refused if somebody changed it since. Rich-text fields take Markdown.",
+      "Writes a patch to one existing document and saves it. Only the named fields change. The document has to have been read in this conversation first (get_document, get_current_page or find_documents); the save is refused if somebody changed it since. Rich-text fields take Markdown. One record per request: when several records change, put them all in create_mutation_plan instead.",
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       id: Type.String({ minLength: 1, maxLength: 200 }),
@@ -524,9 +549,10 @@ function updateDocumentTool(context: ToolContext): AgentTool {
         "collection",
       );
       const locale = localeFor(context.config, context.page, input.locale);
+      const key = documentKey(collection, input.id);
+      assertOneRecord(context, key);
       assertFormIsClean(context, collection, input.id);
       const data = shapePatch(collection, input.data, context.actor, locale);
-      const key = documentKey(collection, input.id);
       const expectedRevision = revisionFor(context, key, input.expectedRevision); // prettier-ignore
 
       const updated = await collectionApi(context, collection).update({
@@ -556,6 +582,7 @@ function updateDocumentTool(context: ToolContext): AgentTool {
         revision: Number(updated.revision ?? 0),
       };
       context.onMutation(target, fields);
+      context.savedDocuments?.add(key);
       // The model's next change to the same record builds on this one.
       remember(context, key, updated.revision);
 
@@ -576,15 +603,14 @@ function createDocumentTool(context: ToolContext): AgentTool {
   return {
     name: "create_document",
     label: "Propose a new document",
-    description:
-      "Prepares a new document and asks the editor to approve it. Nothing is written until they do; say so in your reply.",
+    description: `Prepares a new document and shows it to the editor as a card with Approve and Dismiss buttons. Nothing is written until they approve. ${callAtOnce}`,
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       locale: Type.Optional(Type.String({ maxLength: 20 })),
       data: Type.Record(Type.String(), Type.Any()),
     }),
     async execute(_id, parameters) {
-      context.spend();
+      context.spend("proposal");
       const input = parameters as {
         collection: string;
         locale?: string;
@@ -621,14 +647,13 @@ function trashDocumentTool(context: ToolContext): AgentTool {
   return {
     name: "trash_document",
     label: "Propose moving a document to the trash",
-    description:
-      "Asks the editor to approve moving one document to the trash. Nothing is deleted until they approve.",
+    description: `Shows the editor a card with Approve and Dismiss buttons for moving one document to the trash. Nothing is deleted until they approve. ${callAtOnce}`,
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       id: Type.String({ minLength: 1, maxLength: 200 }),
     }),
     async execute(_id, parameters) {
-      context.spend();
+      context.spend("proposal");
       const input = parameters as { collection: string; id: string };
       const collection = requireCollection(
         context.config,
@@ -670,14 +695,13 @@ function restoreDocumentTool(context: ToolContext): AgentTool {
   return {
     name: "restore_document",
     label: "Propose restoring a document",
-    description:
-      "Asks the editor to approve bringing one trashed document back.",
+    description: `Shows the editor a card with Approve and Dismiss buttons for bringing one trashed document back. ${callAtOnce}`,
     parameters: Type.Object({
       collection: Type.String({ minLength: 1, maxLength: 120 }),
       id: Type.String({ minLength: 1, maxLength: 200 }),
     }),
     async execute(_id, parameters) {
-      context.spend();
+      context.spend("proposal");
       const input = parameters as { collection: string; id: string };
       const collection = requireCollection(
         context.config,
@@ -998,7 +1022,7 @@ function createPlanTool(context: ToolContext): AgentTool {
   return {
     name: "create_mutation_plan",
     label: "Propose a batch of changes",
-    description: `Prepares up to ${maxPlanOperations} document updates as one thing for the editor to approve. Use this whenever more than one record changes. Nothing is written until they approve.`,
+    description: `Prepares up to ${maxPlanOperations} document updates and shows them to the editor as one card with Approve and Dismiss buttons. Use it whenever more than one record changes, and for a single change you want the editor to look at before it is saved. Nothing is written until they approve. ${callAtOnce}`,
     parameters: Type.Object({
       summary: Type.String({ minLength: 1, maxLength: 300 }),
       changes: Type.Array(
@@ -1012,7 +1036,7 @@ function createPlanTool(context: ToolContext): AgentTool {
       ),
     }),
     async execute(_id, parameters) {
-      context.spend();
+      context.spend("proposal");
       const input = parameters as {
         summary: string;
         changes: {
@@ -1082,13 +1106,24 @@ async function park(
   const summary = planSummary(plan);
   context.onPlan(summary);
 
+  // No plan id, and the records' titles rather than their ids. The model
+  // cannot approve anything, so an id is of no use to it — and what it is
+  // given, it repeats: answers ended "plan aip_… awaits approval, please
+  // confirm", or listed a batch as six `doc_…` lines, because the ids it had
+  // typed into the call were the only names it had for the records.
+  const titles = plan.operations
+    .filter(
+      (operation) =>
+        operation.id !== undefined && operation.label !== operation.id,
+    )
+    .map((operation) => operation.label);
   return toolText(
     JSON.stringify({
       saved: false,
       awaitingApproval: true,
-      planId: plan.id,
       records: plan.operations.length,
-      note: "The editor has been shown this plan and has to approve it. Tell them what you prepared and that it is waiting for their approval. Do not claim anything was saved.",
+      ...(titles.length === 0 ? {} : { titles }),
+      note: "Nothing is written yet. Under your reply the editor sees this change as a card with Approve and Dismiss buttons, and that card is their confirmation. In a sentence or two, say what you prepared, naming records by title and never by id, and that it is waiting for their approval. Do not ask them to confirm in words, do not list the plan again, never say it was saved, and end your reply there.",
     }),
   );
 }
@@ -1144,6 +1179,28 @@ function assertMediaFormIsClean(context: ToolContext, id: string): void {
   throw new CmsError(
     `The editor has unsaved changes to ${page.dirtyFields.join(", ")} in this file's details pane. Ask them to save or discard those changes first.`,
     { status: 409, code: "active_draft_dirty" },
+  );
+}
+
+/**
+ * One record per request is saved directly; a second is a plan.
+ *
+ * "Anything touching more than one record goes through an approval" was a
+ * sentence in the prompt and nothing else, and a small model asked to fill in
+ * a field on every post saved them one by one — then ran out of steps and
+ * asked the editor whether it should do the rest, which is the double
+ * confirmation the approval card exists to replace. Refusing the second
+ * record here sends the model to `create_mutation_plan` with the remaining
+ * changes, in the same run, and makes the rule the documentation states a
+ * rule rather than a hope. The same record again is fine: a second field, or
+ * a retry after a conflict, is still one record.
+ */
+function assertOneRecord(context: ToolContext, key: string): void {
+  const saved = context.savedDocuments;
+  if (!saved || saved.size === 0 || saved.has(key)) return;
+  throw new CmsError(
+    "This request has already saved a change to another record, and changes to more than one record need the editor's approval. Nothing was written. Put this change, and any others still to make, into one create_mutation_plan now. Do not ask the editor first: the card is how they approve.",
+    { status: 409, code: "ai_plan_required" },
   );
 }
 

@@ -58,12 +58,13 @@ interface Fixture {
 
 async function setup(
   assistant: Partial<AiAssistantConfig> = {},
+  permissions: string[] = editorPermissions,
 ): Promise<Fixture> {
   const adapter = sqlite(new Database(":memory:"));
   const cms = heyoCms({
     database: () => adapter,
     admin: { path: "/admin", title: "Membervet", auth: cmsUsers({ methods: ["password"] }) }, // prettier-ignore
-    rbac: { roles: { admin: ["*"], editor: editorPermissions } },
+    rbac: { roles: { admin: ["*"], editor: permissions } },
     i18n: { locales: ["en", "pl"], defaultLocale: "en" },
     ai: {
       auth: { openai: { type: "api-key", token: key ?? "" } },
@@ -244,6 +245,17 @@ function expectClean(reply: Reply, question: string): void {
   expect(reply.raw).not.toContain(canary);
 }
 
+/** Every Approve card comes after the answer about it, right before `done`. */
+function expectCardAfterAnswer(reply: Reply): void {
+  const said: string[] = reply.events
+    .map((event) => event.type)
+    .filter((type) => type !== "tool-start" && type !== "tool-end" && type !== "mutation-applied"); // prettier-ignore
+  const cards = said.filter((type) => type === "approval-required").length;
+  expect(cards).toBeGreaterThan(0);
+  expect(said.slice(-cards - 1)).toEqual([...Array<string>(cards).fill("approval-required"), "done"]); // prettier-ignore
+  expect(said.indexOf("approval-required")).toBeGreaterThan(said.lastIndexOf("text-delta")); // prettier-ignore
+}
+
 const polishLetters = /[ąćęłńóśźż]/i;
 const looksPolish = (value: string) => polishLetters.test(value) || /\b(jest|się|który|która|oraz|nie)\b/i.test(value); // prettier-ignore
 const looksEnglish = (value: string) => !polishLetters.test(value) && /\b(the|and|your|to|of|a|how|when|with)\b/i.test(value); // prettier-ignore
@@ -389,6 +401,7 @@ describe.skipIf(!enabled)(`the assistant, live on ${modelId}`, () => {
         expectClean(reply, question);
         const plan = ofType(reply, "approval-required")[0]?.plan;
         expect(plan?.operations[0]?.action).toBe("create");
+        expectCardAfterAnswer(reply);
         const count = async () => (await fixture.cms.api.posts!.find({ actor: systemActor(), count: true })).totalDocs; // prettier-ignore
         expect(await count()).toBe(6);
         // It must not claim it saved anything.
@@ -401,6 +414,55 @@ describe.skipIf(!enabled)(`the assistant, live on ${modelId}`, () => {
         expect(await count()).toBe(7);
         const created = await fixture.cms.api.posts!.find({ actor: systemActor(), locale: "en", limit: 1 }); // prettier-ignore
         expect(String(created.docs[0]?.title)).toMatch(/change a card/i);
+      },
+      timeout,
+    );
+
+    test(
+      "a deletion that was asked for goes straight to the Approve card, without a yes/no first",
+      async () => {
+        const fixture = await setup({}, [...editorPermissions, "posts:delete"]);
+        const question = "Usuń wpis „A courier brief for outgoing loans”.";
+        const reply = await ask(fixture, question);
+        expectClean(reply, question);
+        // The card is in this reply: the model did not stop to ask first.
+        const plan = ofType(reply, "approval-required")[0]?.plan;
+        expect(plan?.operations[0]).toMatchObject({ action: "trash", label: "A courier brief for outgoing loans" }); // prettier-ignore
+        expectCardAfterAnswer(reply);
+        // Nothing is deleted until the button is pressed.
+        expect((await read(fixture, fixture.ids.courier, "en"))?.deletedAt).toBeNull(); // prettier-ignore
+      },
+      timeout,
+    );
+
+    test(
+      "filling in a field on several posts ends in an Approve card, not in a question",
+      async () => {
+        const fixture = await setup();
+        const question =
+          "Uzupełnij SEO description we wszystkich wpisach na blogu, które go nie mają.";
+        const reply = await ask(fixture, question, { kind: "dashboard", locale: "en" }); // prettier-ignore
+        expectClean(reply, question);
+        // At most one record saved directly; everything else waits on a card.
+        expect(ofType(reply, "mutation-applied").length).toBeLessThanOrEqual(1);
+        expect(ofType(reply, "approval-required").length).toBeGreaterThanOrEqual(1); // prettier-ignore
+        expectCardAfterAnswer(reply);
+      },
+      timeout,
+    );
+
+    test(
+      "asked to improve a title, it changes it instead of asking which version to save",
+      async () => {
+        const fixture = await setup();
+        const question =
+          "Popraw tytuł tego wpisu, żeby był bardziej chwytliwy.";
+        const reply = await ask(fixture, question, { kind: "document", collectionSlug: "posts", documentId: fixture.ids.team, locale: "en" }); // prettier-ignore
+        expectClean(reply, question);
+        const acted =
+          ofType(reply, "mutation-applied").length +
+          ofType(reply, "approval-required").length;
+        expect(acted).toBeGreaterThanOrEqual(1);
       },
       timeout,
     );

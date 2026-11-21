@@ -255,6 +255,13 @@ function answer(wire: Wire): string {
     .join("");
 }
 
+/** The run as the editor experiences it: what it says, without the steps. */
+function said(wire: Wire): AiAssistantEvent["type"][] {
+  return wire.events
+    .map((event) => event.type)
+    .filter((type) => type !== "tool-start" && type !== "tool-end");
+}
+
 function ofType<T extends AiAssistantEvent["type"]>(
   wire: Wire,
   type: T,
@@ -531,6 +538,31 @@ describe("writing, on the real loop", () => {
     expect(stored?.title).toBe("What happens when a payment fails?");
   });
 
+  test("a second record is not saved directly: the model is sent to a plan, and the editor gets a card", async () => {
+    const fixture = await setup();
+    model(
+      () => act(null, call("get_document", { collection: "posts", id: fixture.ids.team }), call("get_document", { collection: "posts", id: fixture.ids.englishOnly })), // prettier-ignore
+      () => act(null, call("update_document", { collection: "posts", id: fixture.ids.team, data: { seoTitle: "Team" } })), // prettier-ignore
+      // The same record again is still one record.
+      () => act(null, call("update_document", { collection: "posts", id: fixture.ids.team, data: { title: "Invite your whole team" } })), // prettier-ignore
+      () => act(null, call("update_document", { collection: "posts", id: fixture.ids.englishOnly, data: { seoTitle: "English" } })), // prettier-ignore
+      (turn) => {
+        expect(turn.results()[0]?.isError).toBe(true);
+        expect(turn.text()).toMatch(/create_mutation_plan/);
+        expect(turn.text()).toMatch(/Nothing was written/);
+        return act(null, call("create_mutation_plan", { summary: "SEO title", changes: [{ collection: "posts", id: fixture.ids.englishOnly, data: { seoTitle: "English" } }] })); // prettier-ignore
+      },
+      () => say("Saved one; the other is waiting for your approval."),
+    );
+    const wire = await ask(fixture, { message: "uzupełnij SEO title w obu" });
+
+    expect(ofType(wire, "mutation-applied")).toHaveLength(2);
+    expect(new Set(ofType(wire, "mutation-applied").map((event) => event.target.id))).toEqual(new Set([fixture.ids.team])); // prettier-ignore
+    expect(ofType(wire, "approval-required")).toHaveLength(1);
+    const english = await fixture.cms.api.posts!.findById(fixture.ids.englishOnly, { actor: systemActor(), locale: "en" }); // prettier-ignore
+    expect(english?.seoTitle ?? null).toBeNull();
+  });
+
   test("an invented argument is rejected by the tool's schema before anything runs", async () => {
     const fixture = await setup();
     model(
@@ -562,6 +594,12 @@ describe("writing, on the real loop", () => {
           saved: false,
           awaitingApproval: true,
         });
+        // The card is the confirmation; the model is told so, and is given
+        // no plan id it could read out to the editor.
+        expect(turn.json()).not.toHaveProperty("planId");
+        expect(turn.text()).not.toMatch(/aip_/);
+        expect(String(turn.json().note)).toMatch(/Approve and Dismiss/);
+        expect(String(turn.json().note)).toMatch(/Do not ask them to confirm/); // prettier-ignore
         return say("I prepared the post; it is waiting for your approval.");
       },
     );
@@ -569,6 +607,8 @@ describe("writing, on the real loop", () => {
     const plan = ofType(wire, "approval-required")[0]?.plan;
     expect(plan?.operations).toHaveLength(1);
     expect(answer(wire)).toBe("I prepared the post; it is waiting for your approval."); // prettier-ignore
+    // The answer first, the button last.
+    expect(said(wire)).toEqual(["text-delta", "approval-required", "done"]);
 
     const before = await fixture.cms.api.posts!.find({ actor: systemActor(), count: true }); // prettier-ignore
     expect(before.totalDocs).toBe(3);
@@ -579,6 +619,84 @@ describe("writing, on the real loop", () => {
     expect(approved.status).toBe(200);
     const after = await fixture.cms.api.posts!.find({ actor: systemActor(), count: true }); // prettier-ignore
     expect(after.totalDocs).toBe(4);
+  });
+});
+
+describe("approvals, as the editor meets them", () => {
+  test("the model is told, everywhere it decides, to call an approval tool instead of asking first", async () => {
+    const fixture = await setup();
+    model((turn) => {
+      const prompt = turn.context.systemPrompt ?? "";
+      expect(prompt).toContain("Never ask for permission in words");
+      expect(prompt).toMatch(/call the tool in that same turn/);
+      expect(prompt).toMatch(/confirm twice/);
+      const described = Object.fromEntries((turn.context.tools ?? []).map((tool) => [tool.name, tool.description])); // prettier-ignore
+      for (const name of [
+        "create_document",
+        "trash_document",
+        "restore_document",
+        "create_mutation_plan",
+      ]) {
+        // prettier-ignore
+        expect(described[name]).toMatch(/Approve and Dismiss/);
+        expect(described[name]).toMatch(/do not ask them first/);
+      }
+      return say("ok");
+    });
+    await ask(fixture, { message: "x" });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a plan made early in a run is still announced after the whole answer", async () => {
+    const fixture = await setup();
+    model(
+      () => act("Preparing the post.", call("create_document", { collection: "posts", locale: "en", data: { title: "How to cancel a plan" } })), // prettier-ignore
+      // More work after the plan, so the card would otherwise have been on
+      // screen for two steps before the answer arrived above it.
+      () => act(null, call("find_documents", { collection: "posts" })),
+      async () => {
+        await sleep(50);
+        return say('The post "How to cancel a plan" is ready — approve it below.'); // prettier-ignore
+      },
+    );
+    const wire = await ask(fixture, { message: "dodaj wpis o anulowaniu planu" }); // prettier-ignore
+
+    expect(said(wire)).toEqual(["text-delta", "approval-required", "done"]);
+    expect(ofType(wire, "approval-required")[0]?.plan.operations[0]).toMatchObject({ action: "create", fields: ["title"] }); // prettier-ignore
+    // Every step had ended before the plan was announced.
+    const plan = wire.events.findIndex((event) => event.type === "approval-required"); // prettier-ignore
+    const lastStep = wire.events.map((event) => event.type).lastIndexOf("tool-end"); // prettier-ignore
+    expect(plan).toBeGreaterThan(lastStep);
+    expect(wire.raw).not.toContain("Preparing the post");
+  });
+
+  test("two plans in one run: both after the answer", async () => {
+    const fixture = await setup();
+    model(
+      () => act(null, call("create_document", { collection: "posts", data: { title: "First" } }), call("create_document", { collection: "posts", data: { title: "Second" } })), // prettier-ignore
+      () => say("Two posts are waiting for your approval."),
+    );
+    const wire = await ask(fixture, { message: "dodaj dwa wpisy" });
+    expect(said(wire)).toEqual(["text-delta", "approval-required", "approval-required", "done"]); // prettier-ignore
+    const ids = ofType(wire, "approval-required").map((event) => event.plan.id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  test("a run that fails after making a plan still hands the plan over, before the error", async () => {
+    const fixture = await setup();
+    model(
+      () => act(null, call("create_document", { collection: "posts", data: { title: "Kept" } })), // prettier-ignore
+      () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "upstream exploded" }), // prettier-ignore
+    );
+    const wire = await ask(fixture, { message: "x" });
+    expect(said(wire)).toEqual(["approval-required", "error"]);
+
+    // And it is a real plan: approving it writes the post.
+    const plan = ofType(wire, "approval-required")[0]?.plan;
+    const approved = await fixture.cms.handler(
+      new Request(`http://localhost/api/heyo-cms/ai/assistant/plans/${plan?.id}/approve`, { method: "POST", headers: { cookie: fixture.cookie, "x-heyo-cms-client": "admin" } }), // prettier-ignore
+    );
+    expect(approved.status).toBe(200);
   });
 });
 
@@ -634,6 +752,67 @@ describe("budgets, on the real loop", () => {
     );
     expect(calls).toHaveLength(2);
     expect(ofType(wire, "error")).toHaveLength(0);
+  });
+
+  test("out of steps with the changes worked out: it proposes them instead of asking whether to", async () => {
+    const fixture = await setup({ maxTurns: 2 });
+    model(
+      () => act(null, call("find_documents", { collection: "posts", fields: ["seoTitle"] })), // prettier-ignore
+      (turn) => {
+        // Told it is out of steps — and that a proposal is still open to it.
+        expect(turn.toldToWrapUp()).toBe(true);
+        expect(turn.lastText()).toMatch(/one approval call/);
+        expect(turn.lastText()).toMatch(/instead of asking whether to prepare it/); // prettier-ignore
+        // And names no tool, which the model would repeat to the editor.
+        expect(turn.lastText()).not.toMatch(/create_|trash_|restore_|_document|_plan/); // prettier-ignore
+        return act(null, call("create_mutation_plan", { summary: "Fill in SEO titles", changes: [{ collection: "posts", id: fixture.ids.team, data: { seoTitle: "Invite your team" } }, { collection: "posts", id: fixture.ids.englishOnly, data: { seoTitle: "Only in English" } }] })); // prettier-ignore
+      },
+      (turn) => {
+        // Named by the titles the editor knows, not the ids it typed.
+        expect(turn.json()).toMatchObject({ awaitingApproval: true, records: 2, titles: ["Invite your team", "Only in English"] }); // prettier-ignore
+        expect(turn.text()).not.toContain(fixture.ids.team);
+        // The proposal was the one exception: nothing else is offered now.
+        expect(turn.lastText()).not.toMatch(/approval call/);
+        return say("Two SEO titles are waiting for your approval.");
+      },
+    );
+    const wire = await ask(fixture, { message: "uzupełnij SEO title we wszystkich wpisach" }); // prettier-ignore
+    expect(ofType(wire, "error")).toEqual([]);
+    expect(said(wire)).toEqual(["text-delta", "approval-required", "done"]);
+    expect(ofType(wire, "approval-required")[0]?.plan.operations).toHaveLength(2); // prettier-ignore
+  });
+
+  test("past the budget there is one proposal, not a way around the budget", async () => {
+    const fixture = await setup({ maxTurns: 1 });
+    model(
+      () => act(null, call("create_document", { collection: "posts", data: { title: "One" } }), call("create_document", { collection: "posts", data: { title: "Two" } }), call("find_documents", { collection: "posts" })), // prettier-ignore
+      (turn) => {
+        expect(turn.results().map((result) => result.isError)).toEqual([false, true, true]); // prettier-ignore
+        expect(turn.text(1)).toMatch(/No more tool calls/);
+        return say("One post is waiting for your approval.");
+      },
+    );
+    const wire = await ask(fixture, { message: "x" });
+    expect(ofType(wire, "approval-required")).toHaveLength(1);
+    expect(ofType(wire, "error")).toEqual([]);
+  });
+
+  test("short of time, not even a proposal: the answer comes first", async () => {
+    const fixture = await setup({ timeoutMs: 1_500 });
+    model(
+      async () => {
+        await sleep(1_200);
+        return act(null, call("create_document", { collection: "posts", data: { title: "Late" } })); // prettier-ignore
+      },
+      (turn) => {
+        expect(turn.results()[0]?.isError).toBe(true);
+        expect(turn.lastText()).not.toMatch(/approval call/);
+        return say("I ran out of time before I could prepare it.");
+      },
+    );
+    const wire = await ask(fixture, { message: "x" });
+    expect(ofType(wire, "approval-required")).toEqual([]);
+    expect(answer(wire)).toBe("I ran out of time before I could prepare it.");
   });
 
   test("a model that ignores the wrap-up is stopped, with an error that says why", async () => {
